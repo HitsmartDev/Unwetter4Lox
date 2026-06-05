@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Unwetter4Lox Daemon – GeoSphere + INCA -> MQTT"""
-import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob
+import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading
 from datetime import datetime, timezone, timedelta
 
 # LoxBerry SDK imports
@@ -153,10 +153,26 @@ except ImportError:
     MQTT_OK = False
 
 mqtt_client = None
+_mqtt_connected = threading.Event()
+
+def _on_connect(client, userdata, flags, rc):
+    if rc == 0:
+        log.info(f'MQTT verbunden: {MQTT_BROKER}:{MQTT_PORT} (rc=0)')
+        _mqtt_connected.set()
+    else:
+        codes = {1:'falsche Protokollversion', 2:'Client-ID abgelehnt', 3:'Server nicht verfügbar',
+                 4:'falscher User/Passwort', 5:'nicht autorisiert'}
+        log.error(f'MQTT Verbindung fehlgeschlagen: rc={rc} – {codes.get(rc, "unbekannt")}')
+
+def _on_disconnect(client, userdata, rc):
+    _mqtt_connected.clear()
+    if rc != 0:
+        log.warning(f'MQTT Verbindung getrennt (rc={rc}), versuche Reconnect...')
 
 def mqtt_connect():
     global mqtt_client
     if not MQTT_OK: return False
+    _mqtt_connected.clear()
     try:
         # paho-mqtt >= 2.0 erfordert CallbackAPIVersion, ältere Versionen kennen das nicht
         try:
@@ -167,20 +183,39 @@ def mqtt_connect():
             )
         except AttributeError:
             mqtt_client = mqtt.Client(client_id='unwetter4lox', clean_session=True)
-        if MQTT_USER: mqtt_client.username_pw_set(MQTT_USER, MQTT_PASS)
+        mqtt_client.on_connect    = _on_connect
+        mqtt_client.on_disconnect = _on_disconnect
+        if MQTT_USER:
+            mqtt_client.username_pw_set(MQTT_USER, MQTT_PASS)
+            log.info(f'MQTT Auth: User={MQTT_USER}')
+        else:
+            log.info('MQTT ohne Auth')
+        log.info(f'MQTT verbinde zu {MQTT_BROKER}:{MQTT_PORT}...')
         mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
         mqtt_client.loop_start()
-        log.info(f'MQTT verbunden: {MQTT_BROKER}:{MQTT_PORT}')
+        # Warte max. 8 Sekunden auf erfolgreiche Verbindung
+        if not _mqtt_connected.wait(timeout=8):
+            log.error(f'MQTT Verbindungs-Timeout nach 8s ({MQTT_BROKER}:{MQTT_PORT})')
+            return False
         return True
     except Exception as e:
-        log.error(f'MQTT Fehler: {e}'); return False
+        log.error(f'MQTT Verbindungsfehler: {e}')
+        return False
 
 def publish(topic, value, retain=True):
     full = f'{TOPIC_PREFIX}/{topic}'
     payload = str(value) if value is not None else ''
-    if mqtt_client:
-        try: mqtt_client.publish(full, payload, qos=0, retain=retain)
-        except Exception as e: log.error(f'publish {full}: {e}')
+    if mqtt_client and _mqtt_connected.is_set():
+        try:
+            result = mqtt_client.publish(full, payload, qos=0, retain=retain)
+            if result.rc != 0:
+                log.error(f'publish {full}: rc={result.rc}')
+        except Exception as e:
+            log.error(f'publish {full}: {e}')
+    elif not mqtt_client:
+        log.warning(f'publish {full}: kein MQTT Client')
+    else:
+        log.warning(f'publish {full}: MQTT nicht verbunden')
 
 def fetch_json(url):
     try:
@@ -393,9 +428,14 @@ def publish_all(zamg, akut, inca, prev_ids, new_ids):
 
 def run():
     log.info(f'Unwetter4Lox gestartet | {LAT},{LON} | {MQTT_BROKER}:{MQTT_PORT} | {INTERVAL}s')
-    mqtt_connect()
+    if not mqtt_connect():
+        log.warning('MQTT beim Start nicht erreichbar – versuche es im Loop weiter')
     while True:
         try:
+            # Reconnect falls Verbindung getrennt
+            if not _mqtt_connected.is_set():
+                log.info('MQTT Reconnect...')
+                mqtt_connect()
             prev     = load_state()
             prev_ids = prev.get('last_warn_ids', [])
             zamg, akut, new_ids = fetch_zamg()

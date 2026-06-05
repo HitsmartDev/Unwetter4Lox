@@ -5,6 +5,15 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [0.1.2] – 2026-06-05
+
+### Behoben
+- MQTT: Race Condition behoben – Daemon wartete nicht auf erfolgreichen TCP-Verbindungsaufbau bevor Topics publiziert wurden (QoS 0 hat Messages verworfen)
+- MQTT: `on_connect` Callback mit klarer Fehlerdiagnose (rc-Code + Klartext) hinzugefügt
+- MQTT: `on_disconnect` Callback für automatischen Reconnect im Hauptloop
+- MQTT: `publish()` prüft nun ob Verbindung aktiv ist (`_mqtt_connected` Event) statt nur ob Client-Objekt existiert
+- MQTT: Verbindungs-Timeout nach 8s mit Log-Meldung statt stillem Fehlschlag
+
 ## [0.1.1] – 2026-06-05
 
 ### Behoben
