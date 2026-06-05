@@ -5,6 +5,13 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [0.1.1] – 2026-06-05
+
+### Behoben
+- MQTT-Verbindung: Umstellung auf das offizielle LoxBerry Python SDK (`loxberry.mqtt`). Dies behebt Probleme mit dem LoxBerry MQTT Gateway unter LoxBerry 3.0 (korrekte Port- und Credential-Erkennung).
+- Logging: Umstellung auf `loxberry.log`. Die Log-Sessions werden nun korrekt in der LoxBerry-Datenbank registriert und im Standard-LogViewer farbig angezeigt.
+- Bereinigung der Perl-Log-Bridge, um doppelte `<LOGEND>` Tags zu vermeiden.
+
 ## [0.1.0] – 2026-06-05
 
 ### Neu

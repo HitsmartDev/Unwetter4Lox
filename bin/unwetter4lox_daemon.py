@@ -4,6 +4,14 @@
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob
 from datetime import datetime, timezone, timedelta
 
+# LoxBerry SDK imports
+try:
+    import loxberry.log
+    import loxberry.mqtt
+    LB_SDK = True
+except ImportError:
+    LB_SDK = False
+
 LBHOMEDIR    = os.environ.get('LBHOMEDIR', '')
 LBPPLUGINDIR = os.environ.get('LBPPLUGINDIR', 'unwetter4lox')
 CONFIGDIR    = os.path.join(LBHOMEDIR, 'config', 'plugins', LBPPLUGINDIR)
@@ -14,62 +22,36 @@ os.makedirs(DATADIR, exist_ok=True)
 os.makedirs(LOGDIR,  exist_ok=True)
 
 # ---------------------------------------------------------------------------
-# LoxBerry-konformes Log-Format
+# LoxBerry Logging Initialisierung
 # ---------------------------------------------------------------------------
-class LoxBerryFormatter(logging.Formatter):
-    TAG_MAP = {
-        'DEBUG':    '<DEBUG>',
-        'INFO':     '<OK>',
-        'WARNING':  '<WARNING>',
-        'ERROR':    '<ERR>',
-        'CRITICAL': '<CRIT>',
-    }
-    def format(self, record):
-        tag = self.TAG_MAP.get(record.levelname, '<OK>')
-        ts  = self.formatTime(record, '%Y-%m-%d %H:%M:%S')
-        return f'{ts} {tag} {record.getMessage()}'
+log = None
+LOGFILE = None
 
-# ---------------------------------------------------------------------------
-# LoxBerry Log-Session erstellen (via Perl-Bridge oder Fallback)
-# ---------------------------------------------------------------------------
-def _create_log_session():
-    """Erstellt eine neue LoxBerry Log-Session. Gibt (logfile, loglevel) zurück."""
-    pl = os.path.join(LBHOMEDIR, 'bin', 'plugins', LBPPLUGINDIR, 'loglevel.pl')
-    if LBHOMEDIR and os.path.exists(pl):
-        try:
-            r = subprocess.run(
-                ['perl', pl],
-                capture_output=True, text=True, timeout=10
-            )
-            lines = r.stdout.strip().splitlines()
-            if r.returncode == 0 and lines and lines[0].strip():
-                lvl = int(lines[1]) if len(lines) > 1 and lines[1].strip().isdigit() else 6
-                return lines[0].strip(), lvl
-        except Exception:
-            pass
+if LB_SDK:
+    # Offizielles SDK nutzen
+    log = loxberry.log.Logger(name='Daemon', package=LBPPLUGINDIR, logdir=LOGDIR)
+    log.start()
+    LOGFILE = log.filename
+else:
+    # Fallback: Manuelles Logging (für lokale Tests ohne LoxBerry)
+    class LoxBerryFormatter(logging.Formatter):
+        TAG_MAP = {'DEBUG': '<DEBUG>', 'INFO': '<OK>', 'WARNING': '<WARNING>', 'ERROR': '<ERR>', 'CRITICAL': '<CRIT>'}
+        def format(self, record):
+            tag = self.TAG_MAP.get(record.levelname, '<OK>')
+            ts  = self.formatTime(record, '%Y-%m-%d %H:%M:%S')
+            return f'{ts} {tag} {record.getMessage()}'
 
-    # Fallback: eigene Session-Datei im LoxBerry-Format anlegen
-    ts      = datetime.now().strftime('%Y%m%d_%H%M%S')
-    logfile = os.path.join(LOGDIR, f'daemon_{ts}.log')
-    with open(logfile, 'w', encoding='utf-8') as f:
+    ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+    LOGFILE = os.path.join(LOGDIR, f'daemon_{ts}.log')
+    with open(LOGFILE, 'w', encoding='utf-8') as f:
         f.write(f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} <LOGSTART> Unwetter4Lox Daemon\n')
-    # Alte Fallback-Sessions aufräumen (max. 14 behalten)
-    sessions = sorted(glob.glob(os.path.join(LOGDIR, 'daemon_*.log')))
-    while len(sessions) > 14:
-        try:
-            os.remove(sessions.pop(0))
-        except OSError:
-            pass
-    return logfile, 6
+    
+    _fh = logging.FileHandler(LOGFILE, mode='a', encoding='utf-8')
+    _fh.setFormatter(LoxBerryFormatter())
+    logging.basicConfig(level=logging.INFO, handlers=[_fh])
+    log = logging.getLogger('unwetter4lox')
 
-# Log-Level-Mapping: LoxBerry Level 0-7 → Python-Logging-Level
-_LB_LEVEL_MAP = {0: logging.CRITICAL, 1: logging.ERROR, 2: logging.WARNING,
-                 3: logging.WARNING,  4: logging.INFO,  5: logging.INFO,
-                 6: logging.DEBUG,    7: logging.DEBUG}
-
-LOGFILE, _lb_level = _create_log_session()
-
-# Pointer-Datei (wie aloxberry's daemon.log.current) – für Log-Viewer und tail
+# Pointer-Datei für Log-Viewer und log.php
 CURRENT_LOG_PTR = os.path.join(LOGDIR, 'daemon.log.current')
 try:
     with open(CURRENT_LOG_PTR, 'w') as _f:
@@ -77,23 +59,19 @@ try:
 except OSError:
     pass
 
-# Logger aufsetzen (nur FileHandler – kein doppeltes Logging via stdout)
-_fh  = logging.FileHandler(LOGFILE, mode='a', encoding='utf-8')
-_fh.setFormatter(LoxBerryFormatter())
-_py_level = _LB_LEVEL_MAP.get(_lb_level, logging.DEBUG)
-logging.basicConfig(level=_py_level, handlers=[_fh])
-log = logging.getLogger('unwetter4lox')
-
 # ---------------------------------------------------------------------------
 # Signal-Handler: schreibt <LOGEND> bei sauberem Beenden
 # ---------------------------------------------------------------------------
 def _on_signal(signum, frame):
-    log.info('Daemon gestoppt (Signal %d)', signum)
-    try:
-        with open(LOGFILE, 'a', encoding='utf-8') as _f:
-            _f.write(f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} <LOGEND>\n')
-    except OSError:
-        pass
+    log.info(f'Daemon gestoppt (Signal {signum})')
+    if LB_SDK:
+        log.stop()
+    else:
+        try:
+            with open(LOGFILE, 'a', encoding='utf-8') as _f:
+                _f.write(f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} <LOGEND>\n')
+        except OSError:
+            pass
     sys.exit(0)
 
 signal.signal(signal.SIGTERM, _on_signal)
@@ -119,29 +97,43 @@ MQTT_BROKER = '127.0.0.1'; MQTT_PORT = 1883; MQTT_USER = ''; MQTT_PASS = ''
 USE_LB_MQTT = cfg.get('MQTT', 'USE_LOXBERRY_MQTT', fallback='1') == '1'
 
 if USE_LB_MQTT:
-    for p in [
-        os.path.join(LBHOMEDIR, 'config', 'plugins', 'mqttgateway', 'mqtt.json'),
-        os.path.join(LBHOMEDIR, 'config', 'plugins', 'mqttgateway', 'mqtt.cfg'),
-    ]:
-        if os.path.exists(p):
-            try:
-                if p.endswith('.json'):
+    if LB_SDK:
+        try:
+            m = loxberry.mqtt.mqtt_connectiondetails()
+            MQTT_BROKER = m.get('brokeraddress', '127.0.0.1')
+            MQTT_PORT   = int(m.get('brokerport', 1883))
+            MQTT_USER   = m.get('brokeruser', '')
+            MQTT_PASS   = m.get('brokerpass', '')
+            log.info(f'LoxBerry SDK MQTT Gateway erkannt: {MQTT_BROKER}:{MQTT_PORT}')
+        except Exception as e:
+            log.warning(f'LoxBerry SDK MQTT Fehler: {e}')
+    else:
+        # Manueller Fallback für Dateisuche (LoxBerry < 3.0)
+        for p in [
+            os.path.join(LBHOMEDIR, 'config', 'system', 'mqttgateway.json'),
+            os.path.join(LBHOMEDIR, 'config', 'plugins', 'mqttgateway', 'mqtt.json'),
+        ]:
+            if os.path.exists(p):
+                try:
                     d = json.load(open(p))
                     MQTT_BROKER = d.get('brokeraddress', d.get('brokerhost', '127.0.0.1'))
                     MQTT_PORT   = int(d.get('brokerport', 1883))
-                    MQTT_USER   = d.get('brokeruser', '')
-                    MQTT_PASS   = d.get('brokerpass', '')
-                else:
-                    mc = configparser.ConfigParser(); mc.read(p)
-                    s  = mc.sections()[0] if mc.sections() else 'MQTT'
-                    MQTT_BROKER = mc.get(s, 'brokeraddress', fallback='127.0.0.1')
-                    MQTT_PORT   = int(mc.get(s, 'brokerport', fallback='1883'))
-                    MQTT_USER   = mc.get(s, 'brokeruser', fallback='')
-                    MQTT_PASS   = mc.get(s, 'brokerpass', fallback='')
-                log.info(f'LoxBerry MQTT Gateway erkannt: {MQTT_BROKER}:{MQTT_PORT}')
-                break
-            except Exception as e:
-                log.warning(f'MQTT Config Fehler: {e}')
+                    # Versuche cred.json zu lesen
+                    cred_p = os.path.join(os.path.dirname(p), 'cred.json')
+                    if not os.path.exists(cred_p):
+                         cred_p = os.path.join(os.path.dirname(p), 'mqttgatewaycred.json')
+                    
+                    if os.path.exists(cred_p):
+                        cd = json.load(open(cred_p))
+                        MQTT_USER = cd.get('brokeruser', '')
+                        MQTT_PASS = cd.get('brokerpass', '')
+                    else:
+                        MQTT_USER = d.get('brokeruser', '')
+                        MQTT_PASS = d.get('brokerpass', '')
+                    log.info(f'Manuelles MQTT Gateway erkannt: {MQTT_BROKER}:{MQTT_PORT}')
+                    break
+                except Exception as e:
+                    log.warning(f'MQTT Config Fehler ({p}): {e}')
 else:
     MQTT_BROKER = cfg.get('MQTT', 'BROKER', fallback='127.0.0.1')
     MQTT_PORT   = int(cfg.get('MQTT', 'PORT', fallback='1883'))
