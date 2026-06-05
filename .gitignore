@@ -8,9 +8,10 @@ __pycache__/
 dist/
 build/
 
-# Build-Output
+# Build-Output (lokal erzeugt, Release-ZIP kommt via GitHub Actions)
 *.zip
 *.lbplugin
+_stage/
 
 # Laufzeit-Dateien (LoxBerry)
 data/
