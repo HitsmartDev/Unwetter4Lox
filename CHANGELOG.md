@@ -5,6 +5,14 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [0.1.4] – 2026-06-05
+
+### Behoben
+- MQTT rc=5: Wurzelursache gefunden – LoxBerry speichert JSON-Keys großgeschrieben (`Brokeruser`, `Brokerpass`, `Brokerhost`, `Brokerport`), Code suchte nur lowercase → Credentials wurden nie gelesen
+- MQTT Credential-Lookup jetzt case-insensitiv (funktioniert mit Groß- und Kleinschreibung)
+- Suchreihenfolge optimiert: Credentials zuerst direkt in der Haupt-Config suchen (LoxBerry Standard), dann in separaten Dateien
+- Debug-Log zeigt jetzt die tatsächlich vorhandenen JSON-Keys der Config-Datei für einfachere Fehlerdiagnose
+
 ## [0.1.3] – 2026-06-05
 
 ### Behoben

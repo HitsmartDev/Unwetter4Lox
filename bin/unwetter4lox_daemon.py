@@ -109,16 +109,19 @@ def _read_mqtt_creds_from_files():
     # Credential-Dateien: relativ zum gefundenen Config-Verzeichnis + absolute Fallbacks
     cred_names = ['cred.json', 'mqttgatewaycred.json', 'credentials.json']
 
-    # Schlüssel-Varianten je nach LoxBerry-Version
-    broker_keys  = ['brokeraddress', 'brokerhost', 'broker', 'host', 'server']
-    port_keys    = ['brokerport', 'port']
-    user_keys    = ['brokeruser', 'user', 'username', 'mqttuser']
-    pass_keys    = ['brokerpass', 'pass', 'password', 'mqttpass']
+    # Bekannte Schlüssel-Namen (LoxBerry nutzt Großschreibung: Brokeruser, Brokerpass etc.)
+    broker_keys = ['Brokerhost', 'brokerhost', 'brokeraddress', 'Brokeraddress', 'broker', 'host', 'server']
+    port_keys   = ['Brokerport', 'brokerport', 'port']
+    user_keys   = ['Brokeruser', 'brokeruser', 'user', 'username', 'mqttuser']
+    pass_keys   = ['Brokerpass', 'brokerpass', 'pass', 'password', 'mqttpass']
 
     def _get(d, keys, default=''):
+        # Case-insensitive Suche: LoxBerry nutzt Großschreibung (Brokeruser), andere lowercase
+        d_ci = {k.lower(): v for k, v in d.items()}
         for k in keys:
-            if k in d and d[k] not in (None, ''):
-                return d[k]
+            v = d_ci.get(k.lower())
+            if v not in (None, ''):
+                return v
         return default
 
     for p in main_candidates:
@@ -127,33 +130,36 @@ def _read_mqtt_creds_from_files():
             continue
         try:
             d = json.load(open(p))
+            # Debug: vorhandene Keys loggen damit Credential-Probleme leicht diagnositierbar sind
+            log.info(f'MQTT Config Keys in {os.path.basename(p)}: {list(d.keys())}')
             MQTT_BROKER = _get(d, broker_keys, '127.0.0.1')
-            MQTT_PORT   = int(_get(d, port_keys, 1883))
+            MQTT_PORT   = int(_get(d, port_keys, 1883) or 1883)
             log.info(f'MQTT Config geladen: {p} → {MQTT_BROKER}:{MQTT_PORT}')
 
-            # Credentials: erst separate Datei, dann direkt in Config
-            found_creds = False
+            # Credentials: erst direkt in Config (LoxBerry Standard), dann separate Datei
+            MQTT_USER = _get(d, user_keys, '')
+            MQTT_PASS = _get(d, pass_keys, '')
+            if MQTT_USER:
+                log.info(f'MQTT Credentials direkt aus Config (User={MQTT_USER})')
+                return True
+
+            # Fallback: separate Credential-Dateien
             cfg_dir = os.path.dirname(p)
             for cname in cred_names:
                 cred_p = os.path.join(cfg_dir, cname)
                 if os.path.exists(cred_p):
                     try:
                         cd = json.load(open(cred_p))
+                        log.info(f'MQTT Cred-Datei Keys: {list(cd.keys())}')
                         MQTT_USER = _get(cd, user_keys, '')
                         MQTT_PASS = _get(cd, pass_keys, '')
                         log.info(f'MQTT Credentials aus: {cred_p} (User={MQTT_USER or "(leer)"})')
-                        found_creds = True
-                        break
+                        return True
                     except Exception as ce:
                         log.warning(f'MQTT Cred-Datei Fehler ({cred_p}): {ce}')
-            if not found_creds:
-                MQTT_USER = _get(d, user_keys, '')
-                MQTT_PASS = _get(d, pass_keys, '')
-                if MQTT_USER:
-                    log.info(f'MQTT Credentials direkt aus Config (User={MQTT_USER})')
-                else:
-                    log.warning(f'Keine MQTT Credentials gefunden in {p} und keiner der Cred-Dateien: {cred_names}')
-                    log.warning(f'Tipp: USE_LOXBERRY_MQTT=0 setzen und USER/PASS manuell in unwetter4lox.cfg eintragen')
+
+            log.warning(f'Keine MQTT Credentials gefunden – Config Keys waren: {list(d.keys())}')
+            log.warning('Tipp: USER und PASS direkt in unwetter4lox.cfg [MQTT] eintragen')
             return True
         except Exception as e:
             log.warning(f'MQTT Config Fehler ({p}): {e}')
