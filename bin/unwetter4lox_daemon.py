@@ -96,6 +96,70 @@ TOPIC_PREFIX = cfg.get('MQTT',              'TOPIC_PREFIX',        fallback='unw
 MQTT_BROKER = '127.0.0.1'; MQTT_PORT = 1883; MQTT_USER = ''; MQTT_PASS = ''
 USE_LB_MQTT = cfg.get('MQTT', 'USE_LOXBERRY_MQTT', fallback='1') == '1'
 
+def _read_mqtt_creds_from_files():
+    """Sucht LoxBerry MQTT Gateway Credentials in allen bekannten Pfaden."""
+    global MQTT_BROKER, MQTT_PORT, MQTT_USER, MQTT_PASS
+
+    # Alle bekannten Pfade für die Haupt-Config (Broker-Adresse / Port)
+    main_candidates = [
+        os.path.join(LBHOMEDIR, 'config', 'plugins', 'mqttgateway', 'mqtt.json'),
+        os.path.join(LBHOMEDIR, 'config', 'system', 'mqttgateway.json'),
+        os.path.join(LBHOMEDIR, 'config', 'plugins', 'mqttgateway', 'mqttgateway.json'),
+    ]
+    # Credential-Dateien: relativ zum gefundenen Config-Verzeichnis + absolute Fallbacks
+    cred_names = ['cred.json', 'mqttgatewaycred.json', 'credentials.json']
+
+    # Schlüssel-Varianten je nach LoxBerry-Version
+    broker_keys  = ['brokeraddress', 'brokerhost', 'broker', 'host', 'server']
+    port_keys    = ['brokerport', 'port']
+    user_keys    = ['brokeruser', 'user', 'username', 'mqttuser']
+    pass_keys    = ['brokerpass', 'pass', 'password', 'mqttpass']
+
+    def _get(d, keys, default=''):
+        for k in keys:
+            if k in d and d[k] not in (None, ''):
+                return d[k]
+        return default
+
+    for p in main_candidates:
+        if not os.path.exists(p):
+            log.info(f'MQTT Config nicht gefunden: {p}')
+            continue
+        try:
+            d = json.load(open(p))
+            MQTT_BROKER = _get(d, broker_keys, '127.0.0.1')
+            MQTT_PORT   = int(_get(d, port_keys, 1883))
+            log.info(f'MQTT Config geladen: {p} → {MQTT_BROKER}:{MQTT_PORT}')
+
+            # Credentials: erst separate Datei, dann direkt in Config
+            found_creds = False
+            cfg_dir = os.path.dirname(p)
+            for cname in cred_names:
+                cred_p = os.path.join(cfg_dir, cname)
+                if os.path.exists(cred_p):
+                    try:
+                        cd = json.load(open(cred_p))
+                        MQTT_USER = _get(cd, user_keys, '')
+                        MQTT_PASS = _get(cd, pass_keys, '')
+                        log.info(f'MQTT Credentials aus: {cred_p} (User={MQTT_USER or "(leer)"})')
+                        found_creds = True
+                        break
+                    except Exception as ce:
+                        log.warning(f'MQTT Cred-Datei Fehler ({cred_p}): {ce}')
+            if not found_creds:
+                MQTT_USER = _get(d, user_keys, '')
+                MQTT_PASS = _get(d, pass_keys, '')
+                if MQTT_USER:
+                    log.info(f'MQTT Credentials direkt aus Config (User={MQTT_USER})')
+                else:
+                    log.warning(f'Keine MQTT Credentials gefunden in {p} und keiner der Cred-Dateien: {cred_names}')
+                    log.warning(f'Tipp: USE_LOXBERRY_MQTT=0 setzen und USER/PASS manuell in unwetter4lox.cfg eintragen')
+            return True
+        except Exception as e:
+            log.warning(f'MQTT Config Fehler ({p}): {e}')
+    log.error('Keine MQTT Gateway Config-Datei gefunden – bitte USE_LOXBERRY_MQTT=0 und manuell konfigurieren')
+    return False
+
 if USE_LB_MQTT:
     if LB_SDK:
         try:
@@ -104,36 +168,19 @@ if USE_LB_MQTT:
             MQTT_PORT   = int(m.get('brokerport', 1883))
             MQTT_USER   = m.get('brokeruser', '')
             MQTT_PASS   = m.get('brokerpass', '')
-            log.info(f'LoxBerry SDK MQTT Gateway erkannt: {MQTT_BROKER}:{MQTT_PORT}')
+            log.info(f'LoxBerry SDK MQTT Gateway: {MQTT_BROKER}:{MQTT_PORT} User={MQTT_USER or "(leer)"}')
         except Exception as e:
-            log.warning(f'LoxBerry SDK MQTT Fehler: {e}')
+            log.warning(f'LoxBerry SDK MQTT Fehler: {e} – versuche Datei-Fallback')
+            _read_mqtt_creds_from_files()
     else:
-        # Manueller Fallback für Dateisuche (LoxBerry < 3.0)
-        for p in [
-            os.path.join(LBHOMEDIR, 'config', 'system', 'mqttgateway.json'),
-            os.path.join(LBHOMEDIR, 'config', 'plugins', 'mqttgateway', 'mqtt.json'),
-        ]:
-            if os.path.exists(p):
-                try:
-                    d = json.load(open(p))
-                    MQTT_BROKER = d.get('brokeraddress', d.get('brokerhost', '127.0.0.1'))
-                    MQTT_PORT   = int(d.get('brokerport', 1883))
-                    # Versuche cred.json zu lesen
-                    cred_p = os.path.join(os.path.dirname(p), 'cred.json')
-                    if not os.path.exists(cred_p):
-                         cred_p = os.path.join(os.path.dirname(p), 'mqttgatewaycred.json')
-                    
-                    if os.path.exists(cred_p):
-                        cd = json.load(open(cred_p))
-                        MQTT_USER = cd.get('brokeruser', '')
-                        MQTT_PASS = cd.get('brokerpass', '')
-                    else:
-                        MQTT_USER = d.get('brokeruser', '')
-                        MQTT_PASS = d.get('brokerpass', '')
-                    log.info(f'Manuelles MQTT Gateway erkannt: {MQTT_BROKER}:{MQTT_PORT}')
-                    break
-                except Exception as e:
-                    log.warning(f'MQTT Config Fehler ({p}): {e}')
+        _read_mqtt_creds_from_files()
+    # Manueller Override falls in Config gesetzt (auch bei USE_LOXBERRY_MQTT=1)
+    _override_user = cfg.get('MQTT', 'USER', fallback='')
+    _override_pass = cfg.get('MQTT', 'PASS', fallback='')
+    if _override_user:
+        MQTT_USER = _override_user
+        MQTT_PASS = _override_pass
+        log.info(f'MQTT Credentials manuell überschrieben: User={MQTT_USER}')
 else:
     MQTT_BROKER = cfg.get('MQTT', 'BROKER', fallback='127.0.0.1')
     MQTT_PORT   = int(cfg.get('MQTT', 'PORT', fallback='1883'))

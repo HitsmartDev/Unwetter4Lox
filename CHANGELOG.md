@@ -5,6 +5,14 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [0.1.3] – 2026-06-05
+
+### Behoben
+- MQTT rc=5: Erweiterte Suche nach LoxBerry MQTT Credentials in allen bekannten Pfaden und Key-Varianten (cred.json, mqttgatewaycred.json, credentials.json; brokeruser/user/username/mqttuser etc.)
+- MQTT: Manueller User/Pass-Override in `unwetter4lox.cfg` wirkt jetzt auch bei `USE_LOXBERRY_MQTT=1` – Workaround wenn Auto-Erkennung fehlschlägt
+- MQTT: Detailliertes Logging welche Config-Datei gefunden/nicht gefunden wurde + Hinweis wenn keine Credentials gefunden
+- Config-Default: Dokumentation für manuellen Credential-Override direkt in der cfg-Datei
+
 ## [0.1.2] – 2026-06-05
 
 ### Behoben
