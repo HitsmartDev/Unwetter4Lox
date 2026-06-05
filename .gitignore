@@ -15,6 +15,7 @@ _stage/
 
 # Entwickler-Kontext (nicht für andere Nutzer relevant)
 CLAUDE.md
+GEMINI.md
 
 # Laufzeit-Dateien (LoxBerry)
 data/
