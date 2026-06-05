@@ -36,7 +36,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $c .= "PORT="         . intval($_POST['port']                  ?? 1883)               . "\n";
     $c .= "USER="         . strip_tags(trim($_POST['mqtt_user']    ?? ''))                . "\n";
     $c .= "PASS="         . strip_tags(trim($_POST['mqtt_pass']    ?? ''))                . "\n";
-    $c .= "TOPIC_PREFIX=" . strip_tags(trim($_POST['topic_prefix'] ?? 'haus/wetter'))     . "\n\n";
+    $c .= "TOPIC_PREFIX=" . strip_tags(trim($_POST['topic_prefix'] ?? 'unwetter'))        . "\n\n";
     $c .= "[SCHEDULE]\nINTERVAL=" . max(60, intval($_POST['interval'] ?? 300))            . "\n\n";
     $c .= "[THRESHOLDS]\nBOEN_ALARM=" . floatval($_POST['boen_alarm'] ?? 60)              . "\n\n";
     $c .= "[INCA]\n";
@@ -132,7 +132,7 @@ LBWeb::lbheader("Unwetter4Lox – Einstellungen", "https://wiki.loxberry.de", ""
     <label for="topic_prefix">MQTT Topic Prefix</label>
     <input type="text" id="topic_prefix" name="topic_prefix" value="<?= v('MQTT','TOPIC_PREFIX','haus/wetter') ?>">
 </div>
-<p style="font-size:11px;color:#666;margin:2px 0 4px">Beispiel: <code>haus/wetter/warnung/gewitter/stufe</code></p>
+<p style="font-size:11px;color:#666;margin:2px 0 4px">Beispiel: <code>unwetter/warnung/gewitter/stufe</code></p>
 </div>
 
 <!-- INTERVALL -->

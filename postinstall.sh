@@ -1,15 +1,17 @@
 #!/bin/bash
 # Unwetter4Lox postinstall.sh – läuft als loxberry User nach der Installation
+# REPLACELBHOMEDIR und REPLACELBPPLUGINDIR werden vom LoxBerry-Installer ersetzt
 
-PLUGINNAME="unwetter4lox"
-CFGFILE="${LBHOMEDIR}/config/plugins/${LBPPLUGINDIR}/unwetter4lox.cfg"
-CFGDEF="${LBHOMEDIR}/config/plugins/${LBPPLUGINDIR}/unwetter4lox.cfg.default"
+LBHOMEDIR="REPLACELBHOMEDIR"
+PLUGINDIR="REPLACELBPPLUGINDIR"
+CFGFILE="${LBHOMEDIR}/config/plugins/${PLUGINDIR}/unwetter4lox.cfg"
+CFGDEF="${LBHOMEDIR}/config/plugins/${PLUGINDIR}/unwetter4lox.cfg.default"
 
 echo "<INFO> Unwetter4Lox postinstall startet..."
 echo "<INFO> LBHOMEDIR=${LBHOMEDIR}"
-echo "<INFO> LBPPLUGINDIR=${LBPPLUGINDIR}"
+echo "<INFO> PLUGINDIR=${PLUGINDIR}"
 
-# paho-mqtt installieren: erst apt-Paket versuchen, dann pip als Fallback
+# paho-mqtt installieren: apt-Paket bevorzugen, pip als Fallback
 echo "<INFO> Installiere paho-mqtt..."
 if apt-get install -y python3-paho-mqtt 2>/dev/null; then
     echo "<OK> paho-mqtt via apt installiert"
@@ -38,7 +40,7 @@ else
 fi
 
 # Python-Daemon ausführbar machen
-DAEMON_PY="${LBHOMEDIR}/bin/plugins/${LBPPLUGINDIR}/unwetter4lox_daemon.py"
+DAEMON_PY="${LBHOMEDIR}/bin/plugins/${PLUGINDIR}/unwetter4lox_daemon.py"
 if [ -f "${DAEMON_PY}" ]; then
     chmod +x "${DAEMON_PY}"
     echo "<OK> Daemon ausführbar: ${DAEMON_PY}"

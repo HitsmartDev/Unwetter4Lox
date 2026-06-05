@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Unwetter4Lox Daemon – GeoSphere + INCA -> MQTT"""
-import os, sys, json, time, logging, configparser, urllib.request
+import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob
 from datetime import datetime, timezone, timedelta
 
 LBHOMEDIR    = os.environ.get('LBHOMEDIR', '')
@@ -13,10 +13,9 @@ LOGDIR       = os.path.join(LBHOMEDIR, 'log',    'plugins', LBPPLUGINDIR)
 os.makedirs(DATADIR, exist_ok=True)
 os.makedirs(LOGDIR,  exist_ok=True)
 
-# LoxBerry-kompatibles Logging
-# Format: Zeitstempel <TAG> Nachricht (wie LoxBerry Logviewer erwartet)
-LOGFILE = os.path.join(LOGDIR, 'unwetter4lox.log')
-
+# ---------------------------------------------------------------------------
+# LoxBerry-konformes Log-Format
+# ---------------------------------------------------------------------------
 class LoxBerryFormatter(logging.Formatter):
     TAG_MAP = {
         'DEBUG':    '<DEBUG>',
@@ -26,19 +25,83 @@ class LoxBerryFormatter(logging.Formatter):
         'CRITICAL': '<CRIT>',
     }
     def format(self, record):
-        tag = self.TAG_MAP.get(record.levelname, '<INFO>')
+        tag = self.TAG_MAP.get(record.levelname, '<OK>')
         ts  = self.formatTime(record, '%Y-%m-%d %H:%M:%S')
         return f'{ts} {tag} {record.getMessage()}'
 
-_fh  = logging.FileHandler(LOGFILE, encoding='utf-8')
-_fmt = LoxBerryFormatter()
-_fh.setFormatter(_fmt)
-# Kein StreamHandler – Shell-Script redirectet stdout nicht mehr zur Log-Datei,
-# Python schreibt ausschließlich über FileHandler direkt in die Datei
-logging.basicConfig(level=logging.INFO, handlers=[_fh])
+# ---------------------------------------------------------------------------
+# LoxBerry Log-Session erstellen (via Perl-Bridge oder Fallback)
+# ---------------------------------------------------------------------------
+def _create_log_session():
+    """Erstellt eine neue LoxBerry Log-Session. Gibt (logfile, loglevel) zurück."""
+    pl = os.path.join(LBHOMEDIR, 'bin', 'plugins', LBPPLUGINDIR, 'loglevel.pl')
+    if LBHOMEDIR and os.path.exists(pl):
+        try:
+            r = subprocess.run(
+                ['perl', pl],
+                capture_output=True, text=True, timeout=10
+            )
+            lines = r.stdout.strip().splitlines()
+            if r.returncode == 0 and lines and lines[0].strip():
+                lvl = int(lines[1]) if len(lines) > 1 and lines[1].strip().isdigit() else 6
+                return lines[0].strip(), lvl
+        except Exception:
+            pass
+
+    # Fallback: eigene Session-Datei im LoxBerry-Format anlegen
+    ts      = datetime.now().strftime('%Y%m%d_%H%M%S')
+    logfile = os.path.join(LOGDIR, f'daemon_{ts}.log')
+    with open(logfile, 'w', encoding='utf-8') as f:
+        f.write(f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} <LOGSTART> Unwetter4Lox Daemon\n')
+    # Alte Fallback-Sessions aufräumen (max. 14 behalten)
+    sessions = sorted(glob.glob(os.path.join(LOGDIR, 'daemon_*.log')))
+    while len(sessions) > 14:
+        try:
+            os.remove(sessions.pop(0))
+        except OSError:
+            pass
+    return logfile, 6
+
+# Log-Level-Mapping: LoxBerry Level 0-7 → Python-Logging-Level
+_LB_LEVEL_MAP = {0: logging.CRITICAL, 1: logging.ERROR, 2: logging.WARNING,
+                 3: logging.WARNING,  4: logging.INFO,  5: logging.INFO,
+                 6: logging.DEBUG,    7: logging.DEBUG}
+
+LOGFILE, _lb_level = _create_log_session()
+
+# Pointer-Datei (wie aloxberry's daemon.log.current) – für Log-Viewer und tail
+CURRENT_LOG_PTR = os.path.join(LOGDIR, 'daemon.log.current')
+try:
+    with open(CURRENT_LOG_PTR, 'w') as _f:
+        _f.write(LOGFILE)
+except OSError:
+    pass
+
+# Logger aufsetzen (nur FileHandler – kein doppeltes Logging via stdout)
+_fh  = logging.FileHandler(LOGFILE, mode='a', encoding='utf-8')
+_fh.setFormatter(LoxBerryFormatter())
+_py_level = _LB_LEVEL_MAP.get(_lb_level, logging.DEBUG)
+logging.basicConfig(level=_py_level, handlers=[_fh])
 log = logging.getLogger('unwetter4lox')
 
+# ---------------------------------------------------------------------------
+# Signal-Handler: schreibt <LOGEND> bei sauberem Beenden
+# ---------------------------------------------------------------------------
+def _on_signal(signum, frame):
+    log.info('Daemon gestoppt (Signal %d)', signum)
+    try:
+        with open(LOGFILE, 'a', encoding='utf-8') as _f:
+            _f.write(f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} <LOGEND>\n')
+    except OSError:
+        pass
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, _on_signal)
+signal.signal(signal.SIGINT,  _on_signal)
+
+# ---------------------------------------------------------------------------
 # Konfiguration laden
+# ---------------------------------------------------------------------------
 cfg = configparser.ConfigParser()
 cfg.read(os.path.join(CONFIGDIR, 'unwetter4lox.cfg'))
 
@@ -49,7 +112,7 @@ BOEN_ALARM   = float(cfg.get('THRESHOLDS',    'BOEN_ALARM',       fallback='60')
 INCA_ENABLED = cfg.get('INCA',               'ENABLED',           fallback='1') == '1'
 INCA_HORIZON = int(cfg.get('INCA',           'HORIZON_MINUTES',   fallback='60'))
 MIN_STUFE    = int(cfg.get('NOTIFICATIONS',  'MIN_STUFE',         fallback='1'))
-TOPIC_PREFIX = cfg.get('MQTT',              'TOPIC_PREFIX',        fallback='haus/wetter')
+TOPIC_PREFIX = cfg.get('MQTT',              'TOPIC_PREFIX',        fallback='unwetter')
 
 # MQTT: LoxBerry auto oder manuell
 MQTT_BROKER = '127.0.0.1'; MQTT_PORT = 1883; MQTT_USER = ''; MQTT_PASS = ''
@@ -260,7 +323,7 @@ def fetch_inca():
                 if i >= len(serie): break
                 if ts2e(ts) > in60_ts: break
                 pt = serie[i]
-                if pt == 5: res['bald_hagel']  = 1
+                if pt == 5: res['bald_hagel']   = 1
                 if pt == 4: res['bald_graupel'] = 1
     log.info(f'INCA: fx={res["fx_jetzt"]}km/h max30={res["fx_max_30min"]} pt={res["pt_name"]}')
     return res
@@ -310,9 +373,9 @@ def publish_all(zamg, akut, inca, prev_ids, new_ids):
     if inca.get('bald_sturm_30'):   inca_lines.append(f'🟠 Sturmböen <30 min: max {inca["fx_max_30min"]} km/h')
     elif inca.get('bald_sturm_60'): inca_lines.append(f'⚠️ Sturmböen <60 min: max {inca["fx_max_60min"]} km/h')
     m = inca.get('minuten_bis_regen', -1)
-    if inca.get('bald_regen'):      inca_lines.append(f'🌧️ Regen in ~{m} min')
-    elif inca.get('rr_jetzt', 0) > 0: inca_lines.append(f'🌧️ Regen: {inca["rr_jetzt"]} mm/h')
-    if not inca_lines:              inca_lines.append(f'✅ kein Alarm | Böen: {inca.get("fx_jetzt", 0)} km/h')
+    if inca.get('bald_regen'):          inca_lines.append(f'🌧️ Regen in ~{m} min')
+    elif inca.get('rr_jetzt', 0) > 0:   inca_lines.append(f'🌧️ Regen: {inca["rr_jetzt"]} mm/h')
+    if not inca_lines:                  inca_lines.append(f'✅ kein Alarm | Böen: {inca.get("fx_jetzt", 0)} km/h')
     notif_geo  = '\n'.join(zamg_lines) if zamg_lines else 'keine aktiven Warnungen'
     notif_inca = '\n'.join(inca_lines)
     notif_alle = '\n'.join(zamg_lines + ['──'] + inca_lines) if zamg_lines else notif_inca
@@ -337,11 +400,6 @@ def publish_all(zamg, akut, inca, prev_ids, new_ids):
     })
 
 def run():
-    # LoxBerry LOGSTART
-    with open(LOGFILE, 'a', encoding='utf-8') as f:
-        import datetime as _dt
-        f.write('=' * 80 + '\n')
-        f.write(f'{_dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")} <LOGSTART> Unwetter4Lox Daemon gestartet\n')
     log.info(f'Unwetter4Lox gestartet | {LAT},{LON} | {MQTT_BROKER}:{MQTT_PORT} | {INTERVAL}s')
     mqtt_connect()
     while True:

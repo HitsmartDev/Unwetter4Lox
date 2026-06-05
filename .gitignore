@@ -13,6 +13,9 @@ build/
 *.lbplugin
 _stage/
 
+# Entwickler-Kontext (nicht für andere Nutzer relevant)
+CLAUDE.md
+
 # Laufzeit-Dateien (LoxBerry)
 data/
 logs/

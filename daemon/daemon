@@ -1,20 +1,10 @@
 #!/bin/bash
 # Unwetter4Lox – Daemon-Control-Script
-# LoxBerry installiert diese Datei nach: system/daemons/plugins/unwetter4lox
+# WICHTIG: REPLACELBHOMEDIR und REPLACELBPPLUGINDIR werden vom LoxBerry-Installer
+# bei der Installation durch die tatsächlichen Pfade ersetzt (keine Hardcodes nötig)
 
-# LBHOMEDIR aus Environment ODER /etc/environment lesen
-# (sudo strippt Umgebungsvariablen – daher immer /etc/environment als Fallback)
-if [ -z "$LBHOMEDIR" ]; then
-    LBHOMEDIR=$(grep "^LBHOMEDIR=" /etc/environment 2>/dev/null | head -1 | cut -d= -f2 | tr -d '"' | tr -d "'")
-fi
-if [ -z "$LBHOMEDIR" ]; then
-    set -a; source /etc/environment 2>/dev/null; set +a
-fi
-LBHOMEDIR=${LBHOMEDIR:-/opt/loxberry}
-
-# LBPPLUGINDIR: immer hardcoded als Fallback, da sudo Env strippt
-LBPPLUGINDIR=${LBPPLUGINDIR:-unwetter4lox}
-
+LBHOMEDIR="REPLACELBHOMEDIR"
+LBPPLUGINDIR="REPLACELBPPLUGINDIR"
 PYTHON=$(which python3)
 DAEMON="${LBHOMEDIR}/bin/plugins/${LBPPLUGINDIR}/unwetter4lox_daemon.py"
 PIDFILE="${LBHOMEDIR}/log/plugins/${LBPPLUGINDIR}/daemon.pid"
@@ -28,12 +18,10 @@ case "$1" in
             echo "Daemon laeuft bereits (PID $(cat $PIDFILE))"
             exit 0
         fi
-        # Log-Verzeichnis sicherstellen (Python schreibt selbst dorthin via FileHandler)
         mkdir -p "${LOGDIR}"
         chown loxberry:loxberry "${LOGDIR}" 2>/dev/null || true
-        # Stale PID entfernen
         rm -f "$PIDFILE"
-        # Python-Daemon starten – stdout/stderr werden vom Python-Logger in Datei geschrieben
+        # Python-Daemon im Hintergrund starten; Logging übernimmt Python selbst via LoxBerry::Log
         nohup $PYTHON "$DAEMON" > /dev/null 2>&1 &
         echo $! > "$PIDFILE"
         echo "Unwetter4Lox gestartet (PID $!)"
