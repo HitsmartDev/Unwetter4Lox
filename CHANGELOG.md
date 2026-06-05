@@ -5,6 +5,13 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [0.1.5] – 2026-06-05
+
+### Behoben
+- MQTT rc=5: mqttgateway.json hat verschachtelte Struktur – Credentials sind unter `Main`-Key, nicht auf oberster Ebene
+- Credential-Suche durchsucht jetzt alle Sub-Dicts der Config (Main, Gateway, etc.) nicht nur Top-Level
+- Debug-Log zeigt jetzt auch Keys aller Sub-Dicts für vollständige Diagnose
+
 ## [0.1.4] – 2026-06-05
 
 ### Behoben

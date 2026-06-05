@@ -130,17 +130,37 @@ def _read_mqtt_creds_from_files():
             continue
         try:
             d = json.load(open(p))
-            # Debug: vorhandene Keys loggen damit Credential-Probleme leicht diagnositierbar sind
             log.info(f'MQTT Config Keys in {os.path.basename(p)}: {list(d.keys())}')
-            MQTT_BROKER = _get(d, broker_keys, '127.0.0.1')
-            MQTT_PORT   = int(_get(d, port_keys, 1883) or 1883)
+
+            # LoxBerry verschachtelt die Einstellungen unter einem "Main"-Key
+            # Suche daher auf oberster Ebene UND in allen Sub-Dicts (Main, Gateway, etc.)
+            search_dicts = [d]
+            for key in d:
+                if isinstance(d[key], dict):
+                    search_dicts.append(d[key])
+                    log.info(f'MQTT Sub-Keys [{key}]: {list(d[key].keys())}')
+
+            MQTT_BROKER = '127.0.0.1'
+            MQTT_PORT   = 1883
+            for sd in search_dicts:
+                v = _get(sd, broker_keys, '')
+                if v: MQTT_BROKER = v; break
+            for sd in search_dicts:
+                v = _get(sd, port_keys, '')
+                if v: MQTT_PORT = int(v); break
             log.info(f'MQTT Config geladen: {p} → {MQTT_BROKER}:{MQTT_PORT}')
 
-            # Credentials: erst direkt in Config (LoxBerry Standard), dann separate Datei
-            MQTT_USER = _get(d, user_keys, '')
-            MQTT_PASS = _get(d, pass_keys, '')
+            # Credentials in allen Sub-Dicts suchen
+            MQTT_USER = ''; MQTT_PASS = ''
+            for sd in search_dicts:
+                u = _get(sd, user_keys, '')
+                if u:
+                    MQTT_USER = u
+                    MQTT_PASS = _get(sd, pass_keys, '')
+                    log.info(f'MQTT Credentials gefunden (User={MQTT_USER})')
+                    break
+
             if MQTT_USER:
-                log.info(f'MQTT Credentials direkt aus Config (User={MQTT_USER})')
                 return True
 
             # Fallback: separate Credential-Dateien
@@ -151,14 +171,17 @@ def _read_mqtt_creds_from_files():
                     try:
                         cd = json.load(open(cred_p))
                         log.info(f'MQTT Cred-Datei Keys: {list(cd.keys())}')
-                        MQTT_USER = _get(cd, user_keys, '')
-                        MQTT_PASS = _get(cd, pass_keys, '')
-                        log.info(f'MQTT Credentials aus: {cred_p} (User={MQTT_USER or "(leer)"})')
-                        return True
+                        for sd in [cd] + [cd[k] for k in cd if isinstance(cd[k], dict)]:
+                            u = _get(sd, user_keys, '')
+                            if u:
+                                MQTT_USER = u
+                                MQTT_PASS = _get(sd, pass_keys, '')
+                                log.info(f'MQTT Credentials aus {cred_p} (User={MQTT_USER})')
+                                return True
                     except Exception as ce:
                         log.warning(f'MQTT Cred-Datei Fehler ({cred_p}): {ce}')
 
-            log.warning(f'Keine MQTT Credentials gefunden – Config Keys waren: {list(d.keys())}')
+            log.warning(f'Keine MQTT Credentials in {p} – Sub-Dicts: {[k for k in d if isinstance(d[k], dict)]}')
             log.warning('Tipp: USER und PASS direkt in unwetter4lox.cfg [MQTT] eintragen')
             return True
         except Exception as e:
