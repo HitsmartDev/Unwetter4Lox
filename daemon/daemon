@@ -1,0 +1,67 @@
+#!/bin/bash
+# Unwetter4Lox – Daemon-Control-Script
+# LoxBerry installiert diese Datei nach: system/daemons/plugins/unwetter4lox
+
+# LBHOMEDIR aus Environment ODER /etc/environment lesen
+# (sudo strippt Umgebungsvariablen – daher immer /etc/environment als Fallback)
+if [ -z "$LBHOMEDIR" ]; then
+    LBHOMEDIR=$(grep "^LBHOMEDIR=" /etc/environment 2>/dev/null | head -1 | cut -d= -f2 | tr -d '"' | tr -d "'")
+fi
+if [ -z "$LBHOMEDIR" ]; then
+    set -a; source /etc/environment 2>/dev/null; set +a
+fi
+LBHOMEDIR=${LBHOMEDIR:-/opt/loxberry}
+
+# LBPPLUGINDIR: immer hardcoded als Fallback, da sudo Env strippt
+LBPPLUGINDIR=${LBPPLUGINDIR:-unwetter4lox}
+
+PYTHON=$(which python3)
+DAEMON="${LBHOMEDIR}/bin/plugins/${LBPPLUGINDIR}/unwetter4lox_daemon.py"
+PIDFILE="${LBHOMEDIR}/log/plugins/${LBPPLUGINDIR}/daemon.pid"
+LOGDIR="${LBHOMEDIR}/log/plugins/${LBPPLUGINDIR}"
+
+export LBHOMEDIR LBPPLUGINDIR
+
+case "$1" in
+    start)
+        if [ -f "$PIDFILE" ] && kill -0 "$(cat $PIDFILE)" 2>/dev/null; then
+            echo "Daemon laeuft bereits (PID $(cat $PIDFILE))"
+            exit 0
+        fi
+        # Log-Verzeichnis sicherstellen (Python schreibt selbst dorthin via FileHandler)
+        mkdir -p "${LOGDIR}"
+        chown loxberry:loxberry "${LOGDIR}" 2>/dev/null || true
+        # Stale PID entfernen
+        rm -f "$PIDFILE"
+        # Python-Daemon starten – stdout/stderr werden vom Python-Logger in Datei geschrieben
+        nohup $PYTHON "$DAEMON" > /dev/null 2>&1 &
+        echo $! > "$PIDFILE"
+        echo "Unwetter4Lox gestartet (PID $!)"
+        ;;
+    stop)
+        if [ -f "$PIDFILE" ]; then
+            PID=$(cat "$PIDFILE")
+            kill "$PID" 2>/dev/null && echo "gestoppt" || echo "Prozess nicht gefunden"
+            rm -f "$PIDFILE"
+        else
+            pkill -f "unwetter4lox_daemon.py" 2>/dev/null || true
+        fi
+        ;;
+    restart)
+        $0 stop
+        sleep 2
+        $0 start
+        ;;
+    status)
+        if [ -f "$PIDFILE" ] && kill -0 "$(cat $PIDFILE)" 2>/dev/null; then
+            echo "running"
+        else
+            echo "stopped"
+        fi
+        ;;
+    *)
+        echo "Verwendung: $0 {start|stop|restart|status}"
+        exit 1
+        ;;
+esac
+exit 0

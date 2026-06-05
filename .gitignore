@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Build-Output
+*.zip
+*.lbplugin
+
+# Laufzeit-Dateien (LoxBerry)
+data/
+logs/
+
+# IDE / OS
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+*.code-workspace
+
+# Lokale Konfiguration (nie ins Repo)
+config/unwetter4lox.cfg
