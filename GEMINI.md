@@ -6,88 +6,36 @@ LoxBerry-Plugin: Österreichische Unwetterwarnungen (GeoSphere Austria API + INC
 
 ## Sync-Instruktionen
 
-1. **Beim Start:** `aimemory.md` lesen – dort steht der aktuelle Projektzustand, offene Probleme und nächste Schritte.
-2. **Beim Abschluss / Wechsel zu Claude:** `aimemory.md` aktualisieren – Version, was geändert wurde, was als nächstes ansteht, offene Probleme.
-3. **Architektur-Entscheidungen** nicht ändern, ohne es in `aimemory.md` zu dokumentieren.
+1. **Beim Start:** `aimemory.md` lesen (Aktueller Stand: v0.2.2).
+2. **Beim Abschluss / Wechsel zu Claude:** `aimemory.md` aktualisieren.
 
 ---
 
-## Projektstruktur
+## Architektur-Leitplanken (v0.2.1+)
 
-```
-Unwetter4Lox/
-├── plugin.cfg                          # LoxBerry Plugin-Metadaten (Name, Version, Interface)
-├── preinstall.sh                       # Läuft VOR Installation: Python-Version prüfen
-├── postinstall.sh                      # Läuft NACH Installation (als loxberry User): paho-mqtt, Config
-├── postroot.sh                         # Läuft NACH Installation (als root): Sudoers, chmod
-├── CHANGELOG.md
-├── aimemory.md                         # ← Shared AI State – immer lesen/schreiben
-├── bin/
-│   ├── unwetter4lox_daemon.py          # HAUPT-Daemon (Python 3.8+)
-│   └── loglevel.pl                     # Perl-Bridge: erstellt LoxBerry::Log Sessions
-├── config/
-│   └── unwetter4lox.cfg.default        # Standard-Konfiguration
-├── daemon/daemon                       # Daemon-Control-Script (start|stop|restart|status)
-├── uninstall/uninstall                 # Deinstallations-Script
-├── webfrontend/htmlauth/
-│   ├── index.php                       # Status-Seite + Daemon-Steuerung
-│   ├── settings.php                    # Einstellungen (Standort, MQTT, Intervall)
-│   ├── log.php                         # Log-Viewer mit Session-Auswahl
-│   └── ajax.php                        # Daemon start/stop/restart via sudo
-├── templates/lang/
-│   ├── language_de.ini
-│   └── language_en.ini
-├── icons/
-├── apt/apt.txt
-└── .github/workflows/release.yml      # ZIP bei git tag v*
-```
+### MQTT & Topics
+- **Hierarchie:** System-Status auf Top-Level, API-spezifische Daten in Sub-Topics (`zamg/`, `inca/`).
+- **Namensgebung:** Topics müssen logisch der Datenquelle entsprechen.
+- **Multilang:** Texte in MQTT-Payloads (z.B. `niederschlag_typ_name`) müssen lokalisiert sein.
+
+### Internationalisierung (i18n)
+- **Standard:** Immer DE und EN unterstützen.
+- **Python:** SDK Fallback implementieren, falls LoxBerry SDK nicht geladen werden kann (z.B. bei lokalen Tests).
+
+### Geocoding & Standort
+- Adresseingabe erfolgt über `ajax.php` (Nominatim API).
+- **Validierung:** Daemon darf ohne gültige LAT/LON Koordinaten nicht starten (Prüfung im `daemon/daemon` Shell-Script).
+
+### Logging-Integrität
+- **DB-Registrierung:** `name='Daemon'` ist Pflicht für die Sichtbarkeit im LoxBerry-System.
+- **Format:** Striktes Einhalten der `<TAG>` Syntax.
+- **Zeit:** Immer LoxBerry Systemzeit (`astimezone()`) verwenden.
 
 ---
 
-## Tech-Stack
+## Kritische LoxBerry Regeln
 
-- **Python 3.8+** – Daemon-Logik
-- **paho-mqtt** – MQTT Client (kompatibel v1.x + v2.x, `try/except AttributeError` für `CallbackAPIVersion`)
-- **Perl** – LoxBerry Log-Bridge
-- **PHP** – Web-Frontend (jQuery Mobile UI, LoxBerry-Standard)
-- **Bash** – Daemon-Control, Install-Scripts
-
----
-
-## Konfigurationsdatei (`unwetter4lox.cfg`)
-
-```ini
-[LOCATION]
-LAT=47.952835
-LON=13.791286
-NAME=Mein Zuhause
-
-[MQTT]
-USE_LOXBERRY_MQTT=1   # 1=Auto aus LoxBerry Gateway, 0=manuell
-BROKER=127.0.0.1
-PORT=1883
-USER=                 # leer = auto; bei rc=5 hier manuell eintragen
-PASS=
-TOPIC_PREFIX=unwetter
-
-[SCHEDULE]
-INTERVAL=300
-
-[THRESHOLDS]
-BOEN_ALARM=60         # km/h Böen-Alarmschwelle für INCA bald_sturm_*
-
-[INCA]
-ENABLED=1
-HORIZON_MINUTES=60
-
-[NOTIFICATIONS]
-MIN_STUFE=1           # 1=Gelb, 2=Orange, 3=Rot
-```
-
----
-
-## Offene Ideen
-
-- [ ] Mehrsprachigkeit Web-Frontend ausbauen (language_en.ini aktuell minimal)
-- [ ] Automatischer Update-Check via `RELEASECFG` in plugin.cfg aktivieren
-- [ ] Testen mit echten Wetterwarnungen
+- **REPLACELBHOMEDIR:** Einzige erlaubte Methode für Pfad-Referenzen in Skripten.
+- **Sudoers:** Einträge für den Daemon-Start müssen in `postroot.sh` generiert werden.
+- **Auto-Updates:** In `plugin.cfg` via `RELEASECFG` (GitHub Raw URL) steuern.
+- **Konfiguration:** Bestehende `.cfg` Dateien bei Updates schützen (`postinstall.sh`).
