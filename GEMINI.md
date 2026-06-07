@@ -1,41 +1,51 @@
 # GEMINI.md – Unwetter4Lox
 
-LoxBerry-Plugin: Österreichische Unwetterwarnungen (GeoSphere Austria API + INCA Nowcast) → MQTT → Loxone Miniserver.
+LoxBerry-Plugin: Österreichische Unwetterwarnungen (GeoSphere Austria API + INCA Nowcast + TAWES 360°) → MQTT → Loxone Miniserver.
 
 ---
 
 ## Sync-Instruktionen
 
-1. **Beim Start:** `aimemory.md` lesen (Aktueller Stand: v0.2.2).
+1. **Beim Start:** `aimemory.md` lesen (Aktueller Stand: v0.3.0).
 2. **Beim Abschluss / Wechsel zu Claude:** `aimemory.md` aktualisieren.
 
 ---
 
-## Architektur-Leitplanken (v0.2.1+)
+## Architektur-Leitplanken (v0.3.0+)
 
 ### MQTT & Topics
-- **Hierarchie:** System-Status auf Top-Level, API-spezifische Daten in Sub-Topics (`zamg/`, `inca/`).
-- **Namensgebung:** Topics müssen logisch der Datenquelle entsprechen.
-- **Multilang:** Texte in MQTT-Payloads (z.B. `niederschlag_typ_name`) müssen lokalisiert sein.
+- **Hierarchie:** `{prefix}/zamg/`, `{prefix}/inca/`, `{prefix}/tawes/`, `{prefix}/notification/`
+- **TAWES-Topics (neu):** `tawes/dominante_windrichtung`, `tawes/regen_eta_min`, `tawes/gewitter_signal`, `tawes/notification` u.v.m.
+- **Multilang:** Texte in MQTT-Payloads müssen lokalisiert sein (T-Dictionary im Daemon).
+
+### TAWES 360° Korrelation (neu in v0.3.0)
+- **Alle 10min** (480s Threshold im run()-Loop) wird `correlate_tawes()` aufgerufen.
+- **Stationen-Cache:** `tawes_stations.json` im DATADIR, täglich von API erneuert.
+- **Ring-Buffer:** `collections.deque(maxlen=12)` pro Station = 2h Messdaten.
+- **Upstream:** Bearing-Differenz < 70° zur dominanten Windrichtung.
+- **Konfidenz:** 0–100%, zusammengesetzt aus Stationsanzahl, Frontgeschwindigkeit, Windkonsistenz, Trend.
+- **Gewitter-Signal:** Druckabfall < -0.5 hPa/10min **und** Feuchte > 85% bei nächster Upstream-Station.
 
 ### Internationalisierung (i18n)
 - **Standard:** Immer DE und EN unterstützen.
-- **Python:** SDK Fallback implementieren, falls LoxBerry SDK nicht geladen werden kann (z.B. bei lokalen Tests).
+- **Sprachdateien:** `templates/lang/language_de.ini` + `language_en.ini`.
+- **Python:** T-Dictionary mit allen MQTT-Texten (inkl. TAWES-Notifications).
 
 ### Geocoding & Standort
-- Adresseingabe erfolgt über `ajax.php` (Nominatim API).
-- **Validierung:** Daemon darf ohne gültige LAT/LON Koordinaten nicht starten (Prüfung im `daemon/daemon` Shell-Script).
+- Adresseingabe über `ajax.php` (Nominatim API).
+- Daemon prüft LAT/LON vor Start.
 
 ### Logging-Integrität
-- **DB-Registrierung:** `name='Daemon'` ist Pflicht für die Sichtbarkeit im LoxBerry-System.
-- **Format:** Striktes Einhalten der `<TAG>` Syntax.
-- **Zeit:** Immer LoxBerry Systemzeit (`astimezone()`) verwenden.
+- **DB-Registrierung:** `name='Daemon'` für LoxBerry Log-Viewer.
+- **daemon.log.current:** Pointer-Datei im LOGDIR – PHP liest daraus den aktuellen Log-Pfad.
+- **Format:** `<OK>`, `<ERR>`, `<WARNING>`, `<DEBUG>`, `<LOGSTART>`, `<LOGEND>` Tags.
 
 ---
 
 ## Kritische LoxBerry Regeln
 
-- **REPLACELBHOMEDIR:** Einzige erlaubte Methode für Pfad-Referenzen in Skripten.
-- **Sudoers:** Einträge für den Daemon-Start müssen in `postroot.sh` generiert werden.
-- **Auto-Updates:** In `plugin.cfg` via `RELEASECFG` (GitHub Raw URL) steuern.
-- **Konfiguration:** Bestehende `.cfg` Dateien bei Updates schützen (`postinstall.sh`).
+- **REPLACELBHOMEDIR:** Einzige erlaubte Methode für Pfad-Referenzen.
+- **Sudoers:** Daemon-Start-Einträge in `postroot.sh`.
+- **Config-Schutz:** `preupgrade.sh` sichert `.cfg` vor Update → `postroot.sh` stellt wieder her.
+- **TAWES-Migration:** `postroot.sh` fügt `[TAWES]` Sektion automatisch hinzu wenn fehlend.
+- **logfile_button_html:** Immer `LOGFILE` Parameter übergeben (LB_SDK=False → DB leer).

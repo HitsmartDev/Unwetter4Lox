@@ -1,17 +1,17 @@
 # CLAUDE.md – Unwetter4Lox
 
-LoxBerry-Plugin: Österreichische Unwetterwarnungen (GeoSphere Austria API + INCA Nowcast) → MQTT → Loxone Miniserver.
+LoxBerry-Plugin: Österreichische Unwetterwarnungen (GeoSphere Austria API + INCA Nowcast + TAWES 360°) → MQTT → Loxone Miniserver.
 
 ---
 
 ## Sync-Instruktionen
 
-1. **Beim Start:** `aimemory.md` lesen – dort steht der aktuelle Projektzustand (aktuell v0.2.2).
+1. **Beim Start:** `aimemory.md` lesen – dort steht der aktuelle Projektzustand (aktuell v0.3.0).
 2. **Beim Abschluss / Wechsel zu Gemini:** `aimemory.md` aktualisieren.
 
 ---
 
-## Architektur & Standards (v0.2.2+)
+## Architektur & Standards (v0.3.0+)
 
 ### Mehrsprachigkeit (i18n)
 - **PHP:** Nutzt `LBSystem::readlanguage("language.ini")`. Sprachdateien in `templates/lang/`.
@@ -20,12 +20,14 @@ LoxBerry-Plugin: Österreichische Unwetterwarnungen (GeoSphere Austria API + INC
 ### MQTT Topic Struktur
 - Präfix: `unwetter/` (konfigurierbar)
 - **System:** `status` (OK/Error), `letzter_abruf_datum`, `letzter_abruf_epoch`
-- **ZAMG:** `zamg/{typ}/{subtopic}` (ehemals `warnung/`)
+- **ZAMG:** `zamg/{typ}/{subtopic}`
 - **INCA:** `inca/{parameter}`
+- **TAWES:** `tawes/{parameter}` (neu v0.3.0)
 
 ### APIs
 - **GeoSphere Austria (ZAMG):** Wetterwarnungen via `warnungen.zamg.at`.
 - **INCA Nowcast:** Hochauflösende 15min-Vorhersage.
+- **TAWES:** Wetterstations-Messdaten via `dataset.api.hub.geosphere.at/v1/station/current/tawes-v1-10min`. Stationsmetadaten unter `/metadata`. Station IDs als wiederholte `station_ids=` Parameter.
 - **Geocoding:** Nominatim (OpenStreetMap) via `ajax.php`.
 
 ### LoxBerry Logging
