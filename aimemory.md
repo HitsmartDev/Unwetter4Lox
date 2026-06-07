@@ -1,5 +1,5 @@
 ## 📌 Projekt-Status
-- **Version:** 0.4.0 (Major Feature Release)
+- **Version:** 0.4.1 (Bugfix + Enhancement Release)
 - **Letzter Stand (Claude, 2026-06-07):**
 
 ### Abgeschlossen in v0.4.0:
@@ -24,11 +24,24 @@
 - **Aktiv bearbeitet von:** Claude
 - **Status:** Alle Dateien geschrieben, noch kein Commit/ZIP
 
+## 🗜️ ZIP-Erstellung (WICHTIG – Windows-Kompatibilität)
+Das ZIP muss mit .NET ZipFile API erstellt werden, NICHT mit PowerShell Compress-Archive (Windows-Backslashes!).
+Pflicht-Methode in PowerShell:
+```powershell
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$archive = [System.IO.Compression.ZipFile]::Open($zipOut, [System.IO.Compression.ZipArchiveMode]::Create)
+# Für jeden Dateipfad:
+$rel = $file.Substring($root.Length + 1).Replace([char]92, [char]47)   # Backslash → Forward-Slash!
+$entry = $archive.CreateEntry($rel, [System.IO.Compression.CompressionLevel]::Optimal)
+```
+**Einzuschließende Ordner:** `bin/`, `config/`, `daemon/`, `icons/`, `templates/`, `webfrontend/`
+**Einzuschließende Dateien:** `plugin.cfg`, `postroot.sh`, `preupgrade.sh`, `CHANGELOG.md`
+**Ausschließen:** `*.txt`, `*.bak`, `*.pyc`, `__pycache__`
+**Grund:** LoxBerry `unzip` auf Linux erwartet Forward-Slashes. Windows-ZIP-Tools schreiben Backslashes → "appears to use backslashes as path separators" → CRITICAL install failure.
+
 ## 🛠️ Aktueller Fokus (Next Steps)
-1. **ZIP neu bauen** mit Forward-Slash-Fix (PowerShell-Methode mit `.Replace('\', '/')`)
-2. **Git commit** aller geänderten Dateien mit v0.4.0 Message
-3. **Git push**
-4. **Testen:** Plugin auf LoxBerry installieren, Daemon starten, MQTT prüfen
+1. **Testen:** Plugin auf LoxBerry installieren, Daemon starten, MQTT prüfen
+2. **Validieren:** Gesamtstatus-Block, REGEN_ALARM-Schwelle, Miniserver-Button testen
 
 ## ⚠️ Offene Probleme & Erkenntnisse
 - **LB_SDK = False:** LoxBerry Python SDK nicht installiert → Fallback-Modus aktiv. Alle Features laufen ohne SDK.

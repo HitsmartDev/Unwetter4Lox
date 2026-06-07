@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Unwetter4Lox Daemon v0.4.0 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
+"""Unwetter4Lox Daemon v0.4.1 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math
 from datetime import datetime, timezone, timedelta
 from collections import deque
@@ -114,6 +114,7 @@ LAT          = float(_lat_raw)
 LON          = float(_lon_raw)
 INTERVAL     = int(get_cfg('SCHEDULE',       'INTERVAL',          '300'))
 BOEN_ALARM   = float(get_cfg('THRESHOLDS',   'BOEN_ALARM',        '60'))
+REGEN_ALARM  = float(get_cfg('THRESHOLDS',   'REGEN_ALARM',       '2.0'))
 ZAMG_ENABLED = get_cfg('ZAMG',              'ENABLED',             '1') == '1'
 INCA_ENABLED = get_cfg('INCA',              'ENABLED',             '1') == '1'
 INCA_HORIZON = int(get_cfg('INCA',          'HORIZON_MINUTES',     '60'))
@@ -299,6 +300,7 @@ def fetch_inca():
             res['fx_max_30min'], res['fx_max_60min'], res['bald_sturm_30'], res['bald_sturm_60'] = round(m30, 1), round(m60, 1), int(m30 >= BOEN_ALARM), int(m60 >= BOEN_ALARM)
         elif param == 'rr':
             serie = [round(float(v), 2) if v else 0.0 for v in values]; res['rr_jetzt'] = serie[0] if serie else 0.0
+            res['regen_alarm'] = int(res['rr_jetzt'] >= REGEN_ALARM)
             for i, ts in enumerate(ts_list):
                 if i < len(serie) and serie[i] > 0.0:
                     t = datetime.fromisoformat(ts).timestamp()
@@ -518,8 +520,8 @@ def correlate_tawes():
     naechste_upstream = upstream_list[0] if upstream_list else (nearby[0] if nearby else None)
     if naechste_upstream:
         buf = list(TAWES_BUFFER.get(naechste_upstream['id'], []))
-        ffx_raw = [b.get('FFX') for b in buf[-6:]]  # None-Filterung in _linreg_slope
-        slope = _linreg_slope([v * 3.6 for v in ffx_raw])
+        ffx_raw = [b.get('FFX') for b in buf[-6:]]
+        slope = _linreg_slope([(v * 3.6 if v is not None else None) for v in ffx_raw])
         wind_trend = 1 if slope > 1.0 else (-1 if slope < -1.0 else 0)
 
     # Schritt 6: Konfidenz
@@ -536,14 +538,14 @@ def correlate_tawes():
     gewitter_signal = 0; druck_trend = 0.0
     if naechste_upstream:
         buf = list(TAWES_BUFFER.get(naechste_upstream['id'], []))
-        p_raw  = [b.get('P')   for b in buf[-6:]]
+        p_raw     = [b.get('P')   for b in buf[-6:]]
         ffx_raw_g = [b.get('FFX') for b in buf[-6:]]
         druck_trend = round(_linreg_slope(p_raw), 2)
         rf = naechste_upstream.get('RF')
         if druck_trend < -0.5 and rf is not None and rf > 85:
             gewitter_signal = 1
             # Level 2: zusätzlich starker FFX-Anstieg upstream
-            ffx_slope = _linreg_slope([v * 3.6 for v in ffx_raw_g])
+            ffx_slope = _linreg_slope([(v * 3.6 if v is not None else None) for v in ffx_raw_g])
             if ffx_slope > 3.0:
                 gewitter_signal = 2
 
@@ -594,6 +596,8 @@ def publish_tawes(tawes):
               'wind_trend','sturm_upstream','regen_upstream','regen_eta_min','regen_konfidenz',
               'front_speed_kmh','druck_trend','gewitter_signal','upstream_aktiv']:
         publish(f'tawes/{k}', tawes.get(k, 0))
+    publish('tawes/stationen_anzahl', len(tawes.get('alle_stationen', [])))
+    publish('tawes/letztes_update', tawes.get('letztes_update', ''))
     ns = f'{tawes.get("naechste_station_name","–")} ({tawes.get("naechste_station_km",0)}km, {tawes.get("naechste_station_richtung","–")})'
     publish('tawes/naechste_station', ns)
     publish('notification/tawes', tawes.get('notification', ''))
@@ -624,7 +628,8 @@ def build_alarm(zamg, inca, tawes, akut):
     regen = 0
     if zamg.get('regen', {}).get('stufe', 0) >= 1: regen = 1
     if zamg.get('regen', {}).get('aktiv', 0):      regen = 2
-    if inca.get('bald_regen') or inca.get('rr_jetzt', 0) > 0.2: regen = max(regen, 1)
+    if inca.get('regen_alarm'):                     regen = max(regen, 2)
+    elif inca.get('bald_regen') or inca.get('rr_jetzt', 0) > 0.2: regen = max(regen, 1)
     if tawes.get('regen_upstream'):
         eta = tawes.get('regen_eta_min', -1)
         regen = max(regen, 2 if 0 <= eta <= 30 else 1)
@@ -708,6 +713,7 @@ def publish_all(zamg, akut, inca, prev_ids, new_ids, status_msg, tawes=None):
     if inca:
         for k in ['fx_jetzt','ff_jetzt','fx_max_30min','fx_max_60min','rr_jetzt','pt_jetzt','pt_name','bald_regen','bald_hagel','bald_graupel','bald_sturm_30','bald_sturm_60','minuten_bis_regen']:
             publish(f'inca/{k.replace("_jetzt","") if "jetzt" in k else k}', inca.get(k, 0))
+        publish('inca/regen_alarm', inca.get('regen_alarm', 0))
     z_lines = [zamg[t]['notification'] for t in all_types if zamg.get(t,{}).get('stufe',0) >= MIN_STUFE and zamg[t]['notification']]
     if akut: z_lines.insert(0, L['akut_active'])
     i_lines = []
@@ -745,7 +751,7 @@ def publish_all(zamg, akut, inca, prev_ids, new_ids, status_msg, tawes=None):
 # ---------------------------------------------------------------------------
 def run():
     global _tawes_last_fetch
-    log.info(f'Unwetter4Lox v0.4.0 gestartet | {LAT},{LON} | Lang={LBLANG}')
+    log.info(f'Unwetter4Lox v0.4.1 gestartet | {LAT},{LON} | Lang={LBLANG}')
     _tawes_last_fetch = 0
     while True:
         try:
@@ -754,10 +760,18 @@ def run():
             status, zamg, akut, new_ids, inca = 'OK', {}, 0, [], {}
             if ZAMG_ENABLED:
                 zamg, akut, new_ids = fetch_zamg()
-                if zamg is None: status, zamg = 'GeoSphere API Error', {}
+                if zamg is None:
+                    status, zamg = 'GeoSphere API Error', {}
+                else:
+                    aktive = sum(1 for t in zamg.values() if t.get('stufe', 0) > 0)
+                    max_st = max((t.get('stufe', 0) for t in zamg.values()), default=0)
+                    log.info(f'ZAMG: {aktive} Warntypen aktiv | max_stufe={max_st} | akut={akut}')
             if INCA_ENABLED:
                 inca = fetch_inca()
-                if inca is None: status, inca = ('INCA Error' if status == 'OK' else status + ' & INCA Error'), {}
+                if inca is None:
+                    status, inca = ('INCA Error' if status == 'OK' else status + ' & INCA Error'), {}
+                else:
+                    log.info(f'INCA: Boen {inca.get("fx_max_60min",0)} km/h | Regen {inca.get("rr_jetzt",0)} mm/h | ETA {inca.get("minuten_bis_regen",-1)} min | Alarm={inca.get("regen_alarm",0)}')
             # TAWES – nur alle 10min (480s Schwelle)
             tawes = prev.get('tawes', {})
             if TAWES_ENABLED and time.time() - _tawes_last_fetch > 480:

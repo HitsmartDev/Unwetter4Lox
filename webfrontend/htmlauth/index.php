@@ -77,6 +77,12 @@ LBWeb::lbheader($L['MAIN.TITLE'], "https://wiki.loxberry.de", "");
     .status-badge { padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 11px; }
     .badge-ok { background: #4CAF50; color: white; }
     .badge-err { background: #f44336; color: white; }
+    /* Alarm-Kacheln: kein Kursiv, kein Schatten */
+    .alarm-tile { font-style: normal !important; font-family: Arial, Helvetica, sans-serif !important; text-shadow: none !important; -webkit-font-smoothing: antialiased; }
+    .alarm-tile .alarm-icon { font-size: 26px; line-height: 1.2; font-style: normal; }
+    .alarm-tile .alarm-label { font-weight: 700; font-size: 13px; margin-top: 4px; font-style: normal; letter-spacing: 0; }
+    .alarm-tile .alarm-level { font-size: 12px; font-weight: 600; margin-top: 2px; font-style: normal; }
+    .alarm-tile .alarm-desc { font-size: 11px; margin-top: 2px; font-style: normal; opacity: 0.9; }
 </style>
 
 <!-- ================================================================
@@ -95,7 +101,7 @@ $header_bg = $any_alarm >= 3 ? '#f44336' : ($any_alarm == 2 ? '#FF9800' : ($any_
 $header_tc = $any_alarm == 1 ? '#333' : 'white';
 ?>
 <div data-role="collapsible" data-collapsed="false" data-theme="a" data-content-theme="a">
-<h3 style="background:<?= $header_bg ?>;color:<?= $header_tc ?>;border-radius:4px;padding:6px 10px;margin:0">
+<h3 style="background:<?= $header_bg ?>;color:<?= $header_tc ?>;border-radius:4px;padding:6px 10px;margin:0;font-style:normal;text-shadow:none;font-family:Arial,Helvetica,sans-serif">
     🚦 <?= $L['MAIN.ALARM_TITLE'] ?>
 </h3>
 <p style="font-size:11px;color:#888;margin:4px 0"><?= $L['MAIN.ALARM_DESC'] ?></p>
@@ -106,11 +112,11 @@ $header_tc = $any_alarm == 1 ? '#333' : 'white';
     $lbl = alarm_label($lv, $L);
     $desc = $cat["desc_{$lv}"];
 ?>
-<div style="background:<?= $col ?>;border-radius:6px;padding:10px 6px;text-align:center;color:<?= $tc ?>">
-    <div style="font-size:22px;line-height:1.2"><?= $cat['icon'] ?></div>
-    <div style="font-weight:bold;font-size:12px;margin-top:3px"><?= $cat['label'] ?></div>
-    <div style="font-size:11px;margin-top:2px;font-weight:<?= $lv>0?'bold':'normal' ?>"><?= $lbl ?></div>
-    <div style="font-size:10px;margin-top:2px;opacity:0.85"><?= $desc ?></div>
+<div class="alarm-tile" style="background:<?= $col ?>;border-radius:6px;padding:10px 6px;text-align:center;color:<?= $tc ?>">
+    <div class="alarm-icon"><?= $cat['icon'] ?></div>
+    <div class="alarm-label"><?= $cat['label'] ?></div>
+    <div class="alarm-level"><?= $lbl ?></div>
+    <div class="alarm-desc"><?= $desc ?></div>
 </div>
 <?php endforeach; ?>
 </div>

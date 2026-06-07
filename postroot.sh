@@ -79,6 +79,10 @@ if [ -f "${CFGFILE}" ] && ! grep -q "^\[TAWES\]" "${CFGFILE}"; then
     printf '\n[TAWES]\nENABLED=1\nMAX_DISTANCE_KM=120\n' >> "${CFGFILE}"
     echo "<OK> TAWES-Sektion zur Config hinzugefügt"
 fi
+if [ -f "${CFGFILE}" ] && ! grep -q "^REGEN_ALARM=" "${CFGFILE}"; then
+    sed -i '/^\[THRESHOLDS\]/a REGEN_ALARM=2.0' "${CFGFILE}"
+    echo "<OK> REGEN_ALARM zur Config hinzugefügt"
+fi
 
 # Daemon-Script ausführbar machen (LoxBerry kopiert daemon/daemon nach system/daemons/plugins/)
 DAEMONSCRIPT="${LBHOMEDIR}/system/daemons/plugins/${PLUGIN}"

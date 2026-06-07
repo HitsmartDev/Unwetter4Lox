@@ -53,7 +53,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $c .= "HORIZON_MINUTES=" . max(15, min(60, intval($_POST['inca_horizon'] ?? 60)))     . "\n\n";
 
     $c .= "[SCHEDULE]\nINTERVAL=" . max(60, intval($_POST['interval'] ?? 300))            . "\n\n";
-    $c .= "[THRESHOLDS]\nBOEN_ALARM=" . floatval($_POST['boen_alarm'] ?? 60)              . "\n\n";
+    $c .= "[THRESHOLDS]\n";
+    $c .= "BOEN_ALARM="  . floatval($_POST['boen_alarm']  ?? 60)  . "\n";
+    $c .= "REGEN_ALARM=" . floatval($_POST['regen_alarm'] ?? 2.0) . "\n\n";
     $c .= "[NOTIFICATIONS]\nMIN_STUFE=" . max(1, min(4, intval($_POST['min_stufe'] ?? 1))). "\n\n";
 
     $c .= "[TAWES]\n";
@@ -138,7 +140,10 @@ $(function(){
             $('#btn_miniserver').removeClass('ui-disabled');
             if(data.error) {
                 $('#ms_status').html('❌ ' + data.error);
-                if(data.suggestion) $('#addr_search').val(data.suggestion);
+                // Adressfeld nur befüllen wenn es ein echter Ortsname ist (kein generischer Fehler)
+                if(data.suggestion && data.suggestion.length > 5 && data.suggestion !== 'Miniserver') {
+                    $('#addr_search').val(data.suggestion);
+                }
             } else {
                 $('#lat').val(parseFloat(data.lat).toFixed(6));
                 $('#lon').val(parseFloat(data.lon).toFixed(6));
@@ -254,27 +259,30 @@ $(function(){
 
 <!-- INTERVALL & SCHWELLEN -->
 <div data-role="collapsible" data-collapsed="true" data-theme="a" data-content-theme="a">
-<h3>⚙️ <?= $L['MAIN.INTERVAL'] ?> & Schwellen</h3>
+<h3>⚙️ <?= $L['MAIN.INTERVAL'] ?> & Alarmschwellen</h3>
 <div class="ui-field-contain">
-    <label for="interval"><?= $L['MAIN.INTERVAL'] ?>: <span id="iv"><?= v('SCHEDULE','INTERVAL','300') ?></span>s <small style="color:#888">(<?= $L['MAIN.LABEL_DEFAULT'] ?>: 300s)</small></label>
+    <label for="interval"><?= $L['MAIN.INTERVAL'] ?> <small style="color:#888">(<?= $L['MAIN.LABEL_DEFAULT'] ?>: 300 s)</small></label>
     <input type="range" id="interval" name="interval" min="60" max="900" step="30"
-           value="<?= v('SCHEDULE','INTERVAL','300') ?>"
-           oninput="document.getElementById('iv').textContent=this.value">
-    <p style="font-size:10px;color:#888;margin:2px 0">Wie oft der Daemon die Wetter-APIs abfragt. TAWES-Stationen werden immer nur alle 10 Minuten abgerufen.</p>
+           value="<?= v('SCHEDULE','INTERVAL','300') ?>">
+    <p style="font-size:10px;color:#888;margin:2px 0">Wie oft der Daemon die Wetter-APIs abfragt (Sekunden). TAWES-Stationen werden immer nur alle 10 Minuten abgerufen.</p>
 </div>
 <div class="ui-field-contain">
-    <label for="inca_horizon"><?= $L['MAIN.HORIZON'] ?>: <span id="ih"><?= v('INCA','HORIZON_MINUTES','60') ?></span> min <small style="color:#888">(<?= $L['MAIN.LABEL_DEFAULT'] ?>: 60 min)</small></label>
+    <label for="inca_horizon"><?= $L['MAIN.HORIZON'] ?> <small style="color:#888">(<?= $L['MAIN.LABEL_DEFAULT'] ?>: 60 min)</small></label>
     <input type="range" id="inca_horizon" name="inca_horizon" min="15" max="60" step="15"
-           value="<?= v('INCA','HORIZON_MINUTES','60') ?>"
-           oninput="document.getElementById('ih').textContent=this.value">
-    <p style="font-size:10px;color:#888;margin:2px 0">Wie weit der INCA Nowcast in die Zukunft schaut (15–60 Minuten).</p>
+           value="<?= v('INCA','HORIZON_MINUTES','60') ?>">
+    <p style="font-size:10px;color:#888;margin:2px 0">Wie weit der INCA Nowcast vorausschaut. Maximalwert 60 Minuten empfohlen.</p>
 </div>
 <div class="ui-field-contain">
-    <label for="boen_alarm"><?= $L['MAIN.BOEN_ALARM'] ?>: <span id="ba"><?= v('THRESHOLDS','BOEN_ALARM','60') ?></span> km/h <small style="color:#888">(<?= $L['MAIN.LABEL_DEFAULT'] ?>: 60 km/h)</small></label>
+    <label for="boen_alarm"><?= $L['MAIN.BOEN_ALARM'] ?> <small style="color:#888">(<?= $L['MAIN.LABEL_DEFAULT'] ?>: 60 km/h)</small></label>
     <input type="range" id="boen_alarm" name="boen_alarm" min="20" max="120" step="5"
-           value="<?= v('THRESHOLDS','BOEN_ALARM','60') ?>"
-           oninput="document.getElementById('ba').textContent=this.value">
-    <p style="font-size:10px;color:#888;margin:2px 0">Ab welchen Böen-Spitzen (km/h) ein Windalarm ausgelöst wird. Empfehlung: 60 km/h (Beaufort 8).</p>
+           value="<?= v('THRESHOLDS','BOEN_ALARM','60') ?>">
+    <p style="font-size:10px;color:#888;margin:2px 0">Ab welcher Böenstärke (km/h) ein Wind-Alarm ausgelöst wird. 60 km/h = Beaufort 8 (Sturm). Gilt für INCA Nowcast und TAWES upstream.</p>
+</div>
+<div class="ui-field-contain">
+    <label for="regen_alarm"><?= $L['MAIN.REGEN_ALARM'] ?> <small style="color:#888">(<?= $L['MAIN.LABEL_DEFAULT'] ?>: 2.0 mm/h)</small></label>
+    <input type="range" id="regen_alarm" name="regen_alarm" min="0.5" max="20" step="0.5"
+           value="<?= v('THRESHOLDS','REGEN_ALARM','2.0') ?>">
+    <p style="font-size:10px;color:#888;margin:2px 0">Ab welcher Regenrate (mm/h) ein Regen-Alarm ausgelöst wird. 2 mm/h = leichter Regen, 10 mm/h = starker Regen, 20 mm/h = Starkregen.</p>
 </div>
 </div>
 

@@ -78,9 +78,12 @@ if ($action === 'get_miniserver_coords') {
 
     # Fallback: Miniserver-Name aus LoxBerry-Config
     if (!$location_str) $location_str = $name;
-    if (!$location_str) {
+
+    # Generische/nutzlose Namen abfangen – diese können nicht geocodiert werden
+    $generic_names = ['miniserver', 'loxone miniserver', 'my miniserver', 'mein miniserver', 'loxone', 'home', 'zuhause', 'haus'];
+    if (!$location_str || in_array(strtolower(trim($location_str)), $generic_names) || strlen(trim($location_str)) < 5) {
         echo json_encode([
-            'error'      => 'Kein Standort im Miniserver gefunden.',
+            'error'      => 'Kein Standort im Loxone Miniserver hinterlegt. Bitte Adresse manuell eingeben oder in Loxone Config unter Miniserver → Einstellungen → Standort eintragen.',
             'suggestion' => ''
         ]);
         exit;
