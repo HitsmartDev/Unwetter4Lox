@@ -279,10 +279,10 @@ $(function(){
     <p style="font-size:10px;color:#888;margin:2px 0">Ab welcher Böenstärke (km/h) ein Wind-Alarm ausgelöst wird. 60 km/h = Beaufort 8 (Sturm). Gilt für INCA Nowcast und TAWES upstream.</p>
 </div>
 <div class="ui-field-contain">
-    <label for="regen_alarm"><?= $L['MAIN.REGEN_ALARM'] ?> <small style="color:#888">(<?= $L['MAIN.LABEL_DEFAULT'] ?>: 2.0 mm/h)</small></label>
-    <input type="range" id="regen_alarm" name="regen_alarm" min="0.5" max="20" step="0.5"
-           value="<?= v('THRESHOLDS','REGEN_ALARM','2.0') ?>">
-    <p style="font-size:10px;color:#888;margin:2px 0">Ab welcher Regenrate (mm/h) ein Regen-Alarm ausgelöst wird. 2 mm/h = leichter Regen, 10 mm/h = starker Regen, 20 mm/h = Starkregen.</p>
+    <label for="regen_alarm"><?= $L['MAIN.REGEN_ALARM'] ?> <small style="color:#888">(<?= $L['MAIN.LABEL_DEFAULT'] ?>: 10 mm/h)</small></label>
+    <input type="range" id="regen_alarm" name="regen_alarm" min="0.5" max="60" step="0.5"
+           value="<?= v('THRESHOLDS','REGEN_ALARM','10.0') ?>">
+    <p style="font-size:10px;color:#888;margin:2px 0">Ab welcher Regenrate (mm/h) ein Regen-Alarm ausgelöst wird. 2 mm/h = leichter Regen, 10 mm/h = starker Regen, 20–60 mm/h = Starkregen/Unwetter.</p>
 </div>
 </div>
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Unwetter4Lox Daemon v0.4.2 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
+"""Unwetter4Lox Daemon v0.4.3 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math
 from datetime import datetime, timezone, timedelta
 from collections import deque
@@ -114,7 +114,7 @@ LAT          = float(_lat_raw)
 LON          = float(_lon_raw)
 INTERVAL     = int(get_cfg('SCHEDULE',       'INTERVAL',          '300'))
 BOEN_ALARM   = float(get_cfg('THRESHOLDS',   'BOEN_ALARM',        '60'))
-REGEN_ALARM  = float(get_cfg('THRESHOLDS',   'REGEN_ALARM',       '2.0'))
+REGEN_ALARM  = float(get_cfg('THRESHOLDS',   'REGEN_ALARM',       '10.0'))
 ZAMG_ENABLED = get_cfg('ZAMG',              'ENABLED',             '1') == '1'
 INCA_ENABLED = get_cfg('INCA',              'ENABLED',             '1') == '1'
 INCA_HORIZON = int(get_cfg('INCA',          'HORIZON_MINUTES',     '60'))
@@ -768,7 +768,7 @@ def publish_all(zamg, akut, inca, prev_ids, new_ids, status_msg, tawes=None, pre
 # ---------------------------------------------------------------------------
 def run():
     global _tawes_last_fetch
-    log.info(f'Unwetter4Lox v0.4.2 gestartet | {LAT},{LON} | Lang={LBLANG}')
+    log.info(f'Unwetter4Lox v0.4.3 gestartet | {LAT},{LON} | Lang={LBLANG}')
     _tawes_last_fetch = 0
     while True:
         try:

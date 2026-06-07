@@ -57,19 +57,28 @@ else
 fi
 
 # Config-Handling: Upgrade-Backup wiederherstellen ODER Default anlegen
+# Backup liegt in /tmp/ weil LoxBerry den config/-Ordner beim Update komplett löscht.
 CFGDIR="${LBHOMEDIR}/config/plugins/${PLUGIN}"
 CFGFILE="${CFGDIR}/${PLUGIN}.cfg"
 CFGDEF="${CFGDIR}/${PLUGIN}.cfg.default"
-CFGBAK="${CFGDIR}/${PLUGIN}.cfg.upgrade_bak"
+CFGBAK_TMP="/tmp/${PLUGIN}_cfg_upgrade.bak"      # primärer Backup-Ort (überlebt Ordner-Löschung)
+CFGBAK="${CFGDIR}/${PLUGIN}.cfg.upgrade_bak"      # legacy Fallback (ältere Versionen)
 
-if [ -f "${CFGBAK}" ]; then
+mkdir -p "${CFGDIR}"
+
+if [ -f "${CFGBAK_TMP}" ]; then
+    cp "${CFGBAK_TMP}" "${CFGFILE}"
+    chown loxberry:loxberry "${CFGFILE}" 2>/dev/null
+    rm -f "${CFGBAK_TMP}"
+    echo "<OK> Konfiguration aus /tmp Backup wiederhergestellt: ${CFGFILE}"
+elif [ -f "${CFGBAK}" ]; then
     mv "${CFGBAK}" "${CFGFILE}"
-    chown loxberry:loxberry "${CFGFILE}"
-    echo "<OK> Konfiguration aus Upgrade-Backup wiederhergestellt: ${CFGFILE}"
+    chown loxberry:loxberry "${CFGFILE}" 2>/dev/null
+    echo "<OK> Konfiguration aus Ordner-Backup wiederhergestellt: ${CFGFILE}"
 elif [ -f "${CFGDEF}" ] && [ ! -f "${CFGFILE}" ]; then
     cp "${CFGDEF}" "${CFGFILE}"
-    chown loxberry:loxberry "${CFGFILE}"
-    echo "<OK> Standard-Config angelegt: ${CFGFILE}"
+    chown loxberry:loxberry "${CFGFILE}" 2>/dev/null
+    echo "<OK> Standard-Config angelegt (Erstinstallation): ${CFGFILE}"
 else
     echo "<INFO> Bestehende Config bleibt erhalten: ${CFGFILE}"
 fi
@@ -80,8 +89,8 @@ if [ -f "${CFGFILE}" ] && ! grep -q "^\[TAWES\]" "${CFGFILE}"; then
     echo "<OK> TAWES-Sektion zur Config hinzugefügt"
 fi
 if [ -f "${CFGFILE}" ] && ! grep -q "^REGEN_ALARM=" "${CFGFILE}"; then
-    sed -i '/^\[THRESHOLDS\]/a REGEN_ALARM=2.0' "${CFGFILE}"
-    echo "<OK> REGEN_ALARM zur Config hinzugefügt"
+    sed -i '/^\[THRESHOLDS\]/a REGEN_ALARM=10.0' "${CFGFILE}"
+    echo "<OK> REGEN_ALARM zur Config hinzugefügt (Standard: 10.0 mm/h)"
 fi
 
 # Daemon-Script ausführbar machen (LoxBerry kopiert daemon/daemon nach system/daemons/plugins/)

@@ -1,5 +1,5 @@
 ## 📌 Projekt-Status
-- **Version:** 0.4.2 (Feature Release)
+- **Version:** 0.4.3 (Kritischer Bugfix Release)
 - **Letzter Stand (Claude, 2026-06-07):**
 
 ### Abgeschlossen in v0.4.0:
@@ -23,6 +23,12 @@
 
 - **Aktiv bearbeitet von:** Claude
 - **Status:** Alle Dateien geschrieben, noch kein Commit/ZIP
+
+## ⚠️ Config-Backup Mechanismus (KRITISCH)
+`preupgrade.sh` sichert die Config nach `/tmp/unwetter4lox_cfg_upgrade.bak` – NICHT in den config/-Ordner selbst!
+Grund: LoxBerry löscht beim Plugin-Update den gesamten config/-Ordner und legt ihn neu an. Ein Backup im config/-Ordner würde damit gelöscht.
+`postroot.sh` prüft `/tmp/` als erstes, dann config/-Ordner (legacy), dann erst Default.
+ZIP muss `preupgrade.sh` und `postinstall.sh` und `preinstall.sh` immer enthalten!
 
 ## 🗜️ ZIP-Erstellung (WICHTIG – Windows-Kompatibilität)
 Das ZIP muss mit .NET ZipFile API erstellt werden, NICHT mit PowerShell Compress-Archive (Windows-Backslashes!).
