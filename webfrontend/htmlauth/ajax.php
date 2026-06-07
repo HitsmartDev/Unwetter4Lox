@@ -27,6 +27,90 @@ if ($action === 'geocode') {
     exit;
 }
 
+# Koordinaten vom Loxone Miniserver via LoxBerry-Config abrufen
+if ($action === 'get_miniserver_coords') {
+    header('Content-Type: application/json');
+
+    # LoxBerry general.json lesen – enthält Miniserver-Zugangsdaten
+    $gen_file = $lbhomedir . '/config/system/general.json';
+    $gen      = file_exists($gen_file) ? json_decode(file_get_contents($gen_file), true) : null;
+
+    # Ersten konfigurierten Miniserver finden
+    $ms = null;
+    foreach (['Miniserver', 'miniserver'] as $key) {
+        if (!empty($gen[$key]) && is_array($gen[$key])) {
+            $ms = reset($gen[$key]);
+            break;
+        }
+    }
+
+    if (!$ms) {
+        echo json_encode(['error' => 'Kein Miniserver in LoxBerry konfiguriert.']);
+        exit;
+    }
+
+    $ip   = $ms['Ipaddress'] ?? $ms['ipaddress'] ?? '';
+    $port = $ms['Port']      ?? $ms['port']      ?? '80';
+    $user = $ms['Admin']     ?? $ms['admin']     ?? 'admin';
+    $pass = $ms['Pass']      ?? $ms['pass']      ?? '';
+    $name = $ms['Name']      ?? $ms['name']      ?? '';
+
+    if (!$ip) {
+        echo json_encode(['error' => 'Miniserver-IP nicht gefunden.']);
+        exit;
+    }
+
+    # Loxone REST-API: Standort aus /jdev/cfg/api holen
+    $location_str = '';
+    $api_url  = "http://{$ip}:{$port}/jdev/cfg/api";
+    $ctx = stream_context_create(['http' => [
+        'header'        => "Authorization: Basic " . base64_encode("{$user}:{$pass}") . "\r\n",
+        'timeout'       => 5,
+        'ignore_errors' => true,
+    ]]);
+    $res = @file_get_contents($api_url, false, $ctx);
+    if ($res) {
+        $data = json_decode($res, true);
+        $location_str = $data['LL']['value']['location']
+                     ?? $data['LL']['value']['Location']
+                     ?? '';
+    }
+
+    # Fallback: Miniserver-Name aus LoxBerry-Config
+    if (!$location_str) $location_str = $name;
+    if (!$location_str) {
+        echo json_encode([
+            'error'      => 'Kein Standort im Miniserver gefunden.',
+            'suggestion' => ''
+        ]);
+        exit;
+    }
+
+    # Standortstring via Nominatim geocodieren
+    $geo_url  = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' . urlencode($location_str);
+    $geo_ctx  = stream_context_create(['http' => [
+        'header'  => "User-Agent: Unwetter4Lox-Plugin/0.4.0\r\n",
+        'timeout' => 10,
+    ]]);
+    $geo_res  = @file_get_contents($geo_url, false, $geo_ctx);
+    $geo      = json_decode($geo_res, true);
+
+    if (!empty($geo[0])) {
+        echo json_encode([
+            'lat'          => $geo[0]['lat'],
+            'lon'          => $geo[0]['lon'],
+            'display_name' => $geo[0]['display_name'],
+            'source'       => $location_str,
+        ]);
+    } else {
+        echo json_encode([
+            'error'      => "Standort \"{$location_str}\" konnte nicht geocodiert werden. Bitte manuell suchen.",
+            'suggestion' => $location_str,
+        ]);
+    }
+    exit;
+}
+
 # Stations-Cache löschen
 if ($action === 'reload_stations') {
     header('Content-Type: application/json');

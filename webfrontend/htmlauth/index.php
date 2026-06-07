@@ -44,12 +44,22 @@ $mqtt_display = $mqttcred
 function st_color($s) { return [0=>"#4CAF50",1=>"#FFEB3B",2=>"#FF9800",3=>"#f44336",4=>"#9C27B0"][(int)$s]??'#777'; }
 function st_name($s) { global $L; return [0=>$L['MAIN.NO_WARNS'],1=>"GELB",2=>"ORANGE",3=>"ROT",4=>"LILA"][(int)$s]??'–'; }
 
-$akut  = $state['akutwarnung']     ?? 0;
-$irdw  = $state['irgendwas_aktiv'] ?? 0;
-$maxst = (int)($state['max_stufe'] ?? 0);
-$inca  = $state['inca']            ?? [];
-$zamg  = $state['zamg']            ?? [];
-$status = $state['status']         ?? 'OK';
+$akut   = $state['akutwarnung']     ?? 0;
+$irdw   = $state['irgendwas_aktiv'] ?? 0;
+$maxst  = (int)($state['max_stufe'] ?? 0);
+$inca   = $state['inca']            ?? [];
+$zamg   = $state['zamg']            ?? [];
+$alarm  = $state['alarm']           ?? [];
+$status = $state['status']          ?? 'OK';
+
+function alarm_color($lv) {
+    return [0=>'#4CAF50', 1=>'#FFEB3B', 2=>'#FF9800', 3=>'#f44336'][(int)$lv] ?? '#4CAF50';
+}
+function alarm_text_color($lv) { return ((int)$lv === 1) ? '#333' : 'white'; }
+function alarm_label($lv, $L) {
+    return [0=>$L['MAIN.ALARM_KEINE'], 1=>$L['MAIN.ALARM_MOEGLICH'],
+            2=>$L['MAIN.ALARM_AKTIV'],  3=>$L['MAIN.ALARM_AKUT']][(int)$lv] ?? $L['MAIN.ALARM_KEINE'];
+}
 
 LBWeb::lbheader($L['MAIN.TITLE'], "https://wiki.loxberry.de", "");
 ?>
@@ -68,6 +78,48 @@ LBWeb::lbheader($L['MAIN.TITLE'], "https://wiki.loxberry.de", "");
     .badge-ok { background: #4CAF50; color: white; }
     .badge-err { background: #f44336; color: white; }
 </style>
+
+<!-- ================================================================
+     GESAMTSTATUS – alle Quellen kombiniert (alarm/ MQTT Topics)
+     ================================================================ -->
+<?php
+$alarm_cats = [
+    'gewitter' => ['icon'=>'⚡', 'label'=>$L['MAIN.ALARM_GEWITTER'], 'desc_0'=>'Kein Gewitter', 'desc_1'=>'Möglich', 'desc_2'=>'Warnung aktiv', 'desc_3'=>'AKUT – sofort handeln'],
+    'wind'     => ['icon'=>'💨', 'label'=>$L['MAIN.ALARM_WIND'],     'desc_0'=>'Kein Wind-Alarm', 'desc_1'=>'Erhöhte Böen', 'desc_2'=>'Sturm aktiv', 'desc_3'=>'Extremsturm'],
+    'regen'    => ['icon'=>'🌧', 'label'=>$L['MAIN.ALARM_REGEN'],    'desc_0'=>'Kein Regen', 'desc_1'=>'Regen erwartet', 'desc_2'=>'Stark / bald', 'desc_3'=>'Extrem'],
+    'hagel'    => ['icon'=>'🌨', 'label'=>$L['MAIN.ALARM_HAGEL'],    'desc_0'=>'Kein Hagel', 'desc_1'=>'Möglich', 'desc_2'=>'Warnung', 'desc_3'=>'Extrem'],
+    'schnee'   => ['icon'=>'❄️', 'label'=>$L['MAIN.ALARM_SCHNEE'],   'desc_0'=>'Kein Schnee/Eis', 'desc_1'=>'Möglich', 'desc_2'=>'Warnung', 'desc_3'=>'Extrem'],
+];
+$any_alarm = max(array_map(fn($k) => (int)($alarm[$k] ?? 0), array_keys($alarm_cats)));
+$header_bg = $any_alarm >= 3 ? '#f44336' : ($any_alarm == 2 ? '#FF9800' : ($any_alarm == 1 ? '#FFEB3B' : '#4CAF50'));
+$header_tc = $any_alarm == 1 ? '#333' : 'white';
+?>
+<div data-role="collapsible" data-collapsed="false" data-theme="a" data-content-theme="a">
+<h3 style="background:<?= $header_bg ?>;color:<?= $header_tc ?>;border-radius:4px;padding:6px 10px;margin:0">
+    🚦 <?= $L['MAIN.ALARM_TITLE'] ?>
+</h3>
+<p style="font-size:11px;color:#888;margin:4px 0"><?= $L['MAIN.ALARM_DESC'] ?></p>
+<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:8px 0">
+<?php foreach ($alarm_cats as $key => $cat):
+    $lv  = (int)($alarm[$key] ?? 0);
+    $col = alarm_color($lv); $tc = alarm_text_color($lv);
+    $lbl = alarm_label($lv, $L);
+    $desc = $cat["desc_{$lv}"];
+?>
+<div style="background:<?= $col ?>;border-radius:6px;padding:10px 6px;text-align:center;color:<?= $tc ?>">
+    <div style="font-size:22px;line-height:1.2"><?= $cat['icon'] ?></div>
+    <div style="font-weight:bold;font-size:12px;margin-top:3px"><?= $cat['label'] ?></div>
+    <div style="font-size:11px;margin-top:2px;font-weight:<?= $lv>0?'bold':'normal' ?>"><?= $lbl ?></div>
+    <div style="font-size:10px;margin-top:2px;opacity:0.85"><?= $desc ?></div>
+</div>
+<?php endforeach; ?>
+</div>
+<?php if (!empty($alarm['zusammenfassung'])): ?>
+<div style="padding:8px 10px;background:#f5f5f5;border-left:4px solid <?= $header_bg ?>;border-radius:0 4px 4px 0;font-size:13px">
+    <b><?= $alarm['stufe'] > 0 ? 'ZAMG Warnstufe '.$alarm['stufe'].': ' : '' ?></b><?= htmlspecialchars($alarm['zusammenfassung']) ?>
+</div>
+<?php endif; ?>
+</div>
 
 <!-- Fehlende Konfiguration -->
 <?php if (!$coords_set): ?>
@@ -113,53 +165,75 @@ LBWeb::lbheader($L['MAIN.TITLE'], "https://wiki.loxberry.de", "");
 </div>
 </div>
 
-<!-- Warnlage Kachel -->
-<?php 
-    $bg = $akut ? '#f44336' : ($irdw ? '#f97316' : '#4CAF50');
-    $txt = $akut ? $L['MAIN.AKUT_WARN'] : ($irdw ? $L['MAIN.WETTER_WARN'] : $L['MAIN.NO_WARNS']);
-?>
-<div class="status-tile" style="background:<?= $bg ?>;">
-    <h2 style="margin:0"><?= $txt ?></h2>
-    <p style="margin:5px 0 0; opacity:0.9"><?= $L['MAIN.MIN_STUFE'] ?>: <b><?= st_name($maxst) ?></b></p>
-</div>
-
-<!-- GeoSphere Warnungen Grid -->
-<div data-role="collapsible" data-collapsed="false" data-theme="a" data-content-theme="a">
-<h3>🌩️ <?= $L['MAIN.GEO_WARNS'] ?></h3>
+<!-- GeoSphere Warnungen – offizielle ZAMG-Warnkarten -->
+<div data-role="collapsible" data-collapsed="<?= $irdw || $akut ? 'false' : 'true' ?>" data-theme="a" data-content-theme="a">
+<h3>🌩️ <?= $L['MAIN.GEO_WARNS'] ?> <small style="font-size:11px;font-weight:normal;color:#888">(GeoSphere Austria – offizielle Warnungen, Stufe 0-4)</small></h3>
+<p style="font-size:11px;color:#888;margin:2px 0 8px">Grün=keine Warnung · Gelb=Vorsicht · Orange=Markant · Rot=Unwetter · Lila=Extrem. Aktiv=Warnung läuft gerade, Bald=in &lt;30 min.</p>
 <div class="warn-grid">
     <?php
     $typen = ['wind','regen','schnee','glatteis','gewitter','hagel','hitze','kaelte'];
     $lbls  = ['wind'=>$L['wind'],'regen'=>$L['regen'],'schnee'=>$L['schnee'],'glatteis'=>$L['glatteis'],
               'gewitter'=>$L['gewitter'],'hagel'=>$L['hagel'],'hitze'=>$L['hitze'],'kaelte'=>$L['kaelte']];
+    $icons = ['wind'=>'💨','regen'=>'🌧','schnee'=>'❄️','glatteis'=>'🧊','gewitter'=>'⚡','hagel'=>'🌨','hitze'=>'☀️','kaelte'=>'🥶'];
     foreach ($typen as $t):
         $w = $zamg[$t] ?? []; $s = (int)($w['stufe'] ?? 0);
         $active = ($w['aktiv'] ?? 0) || ($w['bald'] ?? 0);
     ?>
     <div class="warn-card st-<?= $s ?> <?= $active ? 'active' : '' ?>">
+        <div style="font-size:18px"><?= $icons[$t] ?? '' ?></div>
         <div style="font-weight:bold; font-size:12px"><?= $lbls[$t] ?></div>
         <div style="font-size:11px; color:<?= st_color($s) ?>; font-weight:bold"><?= st_name($s) ?></div>
         <?php if ($active): ?>
-            <div style="font-size:10px; margin-top:5px; background:<?= $w['aktiv']?'#f44336':'#f97316' ?>; color:white; border-radius:3px; padding:1px 4px">
-                <?= $w['aktiv'] ? 'AKTIV' : 'BALD' ?>
+            <div style="font-size:10px; margin-top:4px; background:<?= $w['aktiv']?'#f44336':'#f97316' ?>; color:white; border-radius:3px; padding:1px 4px">
+                <?= $w['aktiv'] ? '▶ AKTIV' : '⏱ BALD' ?>
             </div>
+            <?php if (!empty($w['end_text'])): ?>
+            <div style="font-size:9px;color:#666;margin-top:2px">bis <?= htmlspecialchars($w['end_text']) ?></div>
+            <?php endif; ?>
         <?php endif; ?>
     </div>
     <?php endforeach; ?>
 </div>
+<?php if ($akut): ?>
+<div style="background:#f44336;color:white;padding:8px 10px;border-radius:4px;margin-top:8px;font-weight:bold">
+    🚨 AKUTWARNUNG: Eine stationsbasierte Unwetterwarnung ist aktiv! Sofortige Gefahr.
+</div>
+<?php endif; ?>
 </div>
 
 <!-- INCA Nowcast Details -->
 <div data-role="collapsible" data-collapsed="true" data-theme="a" data-content-theme="a">
-<h3>📊 <?= $L['MAIN.INCA_NOWCAST'] ?></h3>
+<h3>📊 <?= $L['MAIN.INCA_NOWCAST'] ?> <small style="font-size:11px;font-weight:normal;color:#888">(hochauflösend, alle 15 min)</small></h3>
+<p style="font-size:11px;color:#888;margin:2px 0 6px">INCA = hochauflösende Nowcast-Analyse von GeoSphere Austria. Zeigt die nächsten 60 Minuten auf 1 km Auflösung.</p>
 <ul data-role="listview" data-inset="false">
-<li><span class="ui-li-count"><?= number_format($inca['fx_jetzt'] ?? 0,1) ?> km/h</span>Böen jetzt</li>
-<li><span class="ui-li-count"><?= number_format($inca['ff_jetzt'] ?? 0,1) ?> km/h</span>Wind jetzt</li>
-<li><span class="ui-li-count"><?= number_format($inca['fx_max_30min'] ?? 0,1) ?> km/h</span>Max Böen 30 min</li>
-<li><span class="ui-li-count"><?= number_format($inca['fx_max_60min'] ?? 0,1) ?> km/h</span>Max Böen 60 min</li>
-<li><span class="ui-li-count"><?= number_format($inca['rr_jetzt'] ?? 0,2) ?> mm/h</span>Niederschlag</li>
-<li><span class="ui-li-count"><?= htmlspecialchars($inca['pt_name'] ?? '–') ?></span>Niederschlagstyp</li>
+<li data-icon="false">
+    <span class="ui-li-count" style="<?= ($inca['fx_jetzt'] ?? 0) >= ($cfg['THRESHOLDS']['BOEN_ALARM'] ?? 60) ? 'color:#f44336' : '' ?>">
+        <?= number_format($inca['fx_jetzt'] ?? 0,1) ?> km/h
+    </span>
+    <b>Böen jetzt</b> – aktuelle Spitzenböen am Standort
+</li>
+<li data-icon="false"><span class="ui-li-count"><?= number_format($inca['ff_jetzt'] ?? 0,1) ?> km/h</span><b>Wind jetzt</b> – mittlere Windgeschwindigkeit</li>
+<li data-icon="false">
+    <span class="ui-li-count" style="<?= ($inca['fx_max_30min'] ?? 0) >= ($cfg['THRESHOLDS']['BOEN_ALARM'] ?? 60) ? 'color:#f44336' : '' ?>">
+        <?= number_format($inca['fx_max_30min'] ?? 0,1) ?> km/h
+    </span>
+    <b>Max Böen 30 min</b> – höchste Böe in den nächsten 30 Minuten
+</li>
+<li data-icon="false">
+    <span class="ui-li-count" style="<?= ($inca['fx_max_60min'] ?? 0) >= ($cfg['THRESHOLDS']['BOEN_ALARM'] ?? 60) ? 'color:#f44336' : '' ?>">
+        <?= number_format($inca['fx_max_60min'] ?? 0,1) ?> km/h
+    </span>
+    <b>Max Böen 60 min</b> – höchste Böe in der nächsten Stunde
+</li>
+<li data-icon="false"><span class="ui-li-count"><?= number_format($inca['rr_jetzt'] ?? 0,2) ?> mm/h</span><b>Niederschlag jetzt</b> – Intensität aktuell</li>
+<li data-icon="false"><span class="ui-li-count"><?= htmlspecialchars($inca['pt_name'] ?? '–') ?></span><b>Niederschlagstyp</b> – Regen / Schnee / Hagel / …</li>
 <?php $mbr = $inca['minuten_bis_regen'] ?? -1; ?>
-<li><span class="ui-li-count"><?= $mbr >= 0 ? "~{$mbr} min" : '–' ?></span>Regen in</li>
+<li data-icon="false">
+    <span class="ui-li-count" style="<?= $mbr >= 0 && $mbr <= 15 ? 'color:#f44336' : '' ?>">
+        <?= $mbr >= 0 ? "~{$mbr} min" : '☀️ trocken' ?>
+    </span>
+    <b>Regen kommt in</b> – Zeit bis zum nächsten Niederschlag (-1 = keiner in Sicht)
+</li>
 </ul>
 </div>
 
@@ -198,13 +272,13 @@ if ($tawes_en):
 <h4><?= $L['MAIN.TAWES_STATIONEN'] ?> (<?= count($tawes['alle_stationen']) ?>)</h4>
 <table style="width:100%;font-size:11px;border-collapse:collapse">
 <tr style="background:#eee;font-weight:bold">
-    <td style="padding:4px"><?= $L['MAIN.TAWES_ST_NAME'] ?></td>
-    <td style="padding:4px;text-align:center">km</td>
-    <td style="padding:4px;text-align:center">Dir.</td>
-    <td style="padding:4px;text-align:center">FF</td>
-    <td style="padding:4px;text-align:center">FFX</td>
-    <td style="padding:4px;text-align:center">RR</td>
-    <td style="padding:4px;text-align:center">⬆</td>
+    <td style="padding:4px">Station</td>
+    <td style="padding:4px;text-align:center" title="Entfernung vom Standort">km</td>
+    <td style="padding:4px;text-align:center" title="Himmelsrichtung der Station von deinem Standort">Richtg.</td>
+    <td style="padding:4px;text-align:center" title="Mittlere Windgeschwindigkeit (km/h)">Wind</td>
+    <td style="padding:4px;text-align:center" title="Böenspitzen (km/h)">Böen</td>
+    <td style="padding:4px;text-align:center" title="Niederschlag mm pro 10 Minuten">Regen</td>
+    <td style="padding:4px;text-align:center" title="⬆ = Upstream: Wind kommt von dieser Station zu dir">⬆</td>
 </tr>
 <?php
 $boen_sw = (float)($cfg['THRESHOLDS']['BOEN_ALARM'] ?? 60);
@@ -226,7 +300,10 @@ foreach ($tawes['alle_stationen'] as $st):
 </tr>
 <?php endforeach; ?>
 </table>
-<p style="font-size:10px;color:#888;margin:4px 0">⬆ = Upstream (Windrichtung zeigt auf deinen Standort)</p>
+<p style="font-size:10px;color:#888;margin:4px 0">
+    <b>⬆ Upstream</b> = der Wind kommt gerade von dieser Station zu dir. Diese Stationen sind besonders relevant für Vorhersagen.<br>
+    <b>Wind</b> = mittl. Windgeschwindigkeit km/h &nbsp;·&nbsp; <b>Böen</b> = Spitzenböen km/h &nbsp;·&nbsp; <b>Regen</b> = mm/10min
+</p>
 </div>
 <?php endif; ?>
 <p style="font-size:10px;color:#888;margin:4px 0"><?= $L['MAIN.TAWES_LAST_UPDATE'] ?>: <?= htmlspecialchars($tawes['letztes_update'] ?? '–') ?></p>

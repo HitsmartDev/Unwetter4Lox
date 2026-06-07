@@ -1,172 +1,257 @@
-# Unwetter4Lox
+# Unwetter4Lox v0.4.0
 
-LoxBerry-Plugin: Österreichische Unwetterwarnungen (GeoSphere Austria) und INCA Nowcast per MQTT an den Loxone Miniserver.
-
----
-
-## Was macht das Plugin?
-
-- Ruft alle N Sekunden (Standard: 300) die **GeoSphere Austria Warn-API** ab
-- Ruft den **INCA Nowcast** (Böen, Niederschlag, Hagel/Graupel) ab
-- Veröffentlicht alle Werte per **MQTT** über das LoxBerry MQTT Gateway (oder manuell konfigurierten Broker)
-- Erstellt fertige **Notification-Texte** für Loxone Push-Nachrichten
+LoxBerry-Plugin für präzise österreichische Unwetterwarnungen, Kurzzeit-Vorhersagen und Echtzeit-Wetterdaten von naheliegenden Messstationen. Es kombiniert **drei offizielle Datenquellen** der GeoSphere Austria und liefert alle Informationen via **MQTT** an den **Loxone Miniserver**.
 
 ---
 
-## Voraussetzungen
+## Was macht dieses Plugin?
 
-| Anforderung | Mindestversion |
-|---|---|
-| LoxBerry | 2.0 |
-| Python | 3.8 |
-| LoxBerry MQTT Gateway | empfohlen (optional) |
+Unwetter4Lox überwacht kontinuierlich die offizielle Warn-Infrastruktur von GeoSphere Austria (früher ZAMG) für deinen genauen Standort und sendet alle relevanten Wetterdaten an deinen Loxone Miniserver. Das ermöglicht vollautomatische Reaktionen: Beschattung einfahren, Bewässerung stoppen, Alarmierung bei Extremwetter.
 
----
-
-## Installation
-
-1. [`create-plugin-zip.sh`](create-plugin-zip.sh) ausführen (auf Linux/macOS):
-   ```bash
-   chmod +x create-plugin-zip.sh
-   ./create-plugin-zip.sh
-   ```
-   Oder: ZIP-Datei direkt aus dem GitHub-Release herunterladen.
-
-2. In LoxBerry: **Plugin Manager** → **ZIP-Datei installieren** → die erzeugte `.zip` hochladen
-
-3. Nach der Installation: **Einstellungen** im Plugin-Tab öffnen und Standort (Lat/Lon) eintragen
-
-4. Daemon über den **Status-Tab** starten
-
----
-
-## Konfiguration
-
-| Parameter | Bedeutung | Standard |
-|---|---|---|
-| LAT / LON | GPS-Koordinaten des Standorts | 47.952835 / 13.791286 |
-| NAME | Bezeichnung des Standorts | Mein Zuhause |
-| USE_LOXBERRY_MQTT | LoxBerry MQTT Gateway automatisch verwenden | 1 (ein) |
-| TOPIC_PREFIX | MQTT Topic-Präfix | `haus/wetter` |
-| INTERVAL | Abfrageintervall in Sekunden | 300 |
-| BOEN_ALARM | Böen-Alarmschwelle km/h | 60 |
-| INCA / ENABLED | INCA Nowcast aktivieren | 1 |
-| INCA / HORIZON_MINUTES | Zeithorizont für Max-Böen | 60 |
-| MIN_STUFE | Mindeststufe für Notification-Text | 1 |
-
----
-
-## MQTT Topics
-
-Alle Topics beginnen mit `TOPIC_PREFIX` (Standard: `haus/wetter`).
-
-### GeoSphere Warnungen
-
-```
-haus/wetter/warnung/wind/stufe          0–4 (0=keine, 1=Gelb, 2=Orange, 3=Rot, 4=Lila)
-haus/wetter/warnung/wind/aktiv          0 oder 1
-haus/wetter/warnung/wind/bald           0 oder 1 (Warnung beginnt in <30 min)
-haus/wetter/warnung/wind/start_text     z.B. "heute 14:00"
-haus/wetter/warnung/wind/end_text       z.B. "morgen 08:00"
-haus/wetter/warnung/wind/notification   Fertigtext für Loxone Push
-```
-
-Gleiche Struktur für: `regen`, `schnee`, `glatteis`, `gewitter`, `hagel`, `hitze`, `kaelte`
-
-```
-haus/wetter/warnung/akutwarnung         0 oder 1 (GeoSphere GWA-Stationswarnung)
-haus/wetter/warnung/max_stufe           0–4
-haus/wetter/warnung/irgendwas_aktiv    0 oder 1
-```
-
-### INCA Nowcast
-
-```
-haus/wetter/inca/boen_jetzt_kmh         aktuelle Böenstärke in km/h
-haus/wetter/inca/wind_jetzt_kmh         aktueller Windmittelwert km/h
-haus/wetter/inca/boen_max_30min         max. Böen nächste 30 min km/h
-haus/wetter/inca/boen_max_60min         max. Böen nächste 60 min km/h
-haus/wetter/inca/niederschlag_jetzt     Niederschlagsrate mm/h
-haus/wetter/inca/niederschlag_typ       255=kein, 1=Regen, 2=Schnee, 3=Schneeregen, 4=Graupel, 5=Hagel
-haus/wetter/inca/niederschlag_typ_name  Klartext
-haus/wetter/inca/bald_regen             0/1 – Regen in <30 min
-haus/wetter/inca/bald_hagel             0/1 – Hagel in <60 min
-haus/wetter/inca/bald_graupel           0/1 – Graupel in <60 min
-haus/wetter/inca/bald_sturm_30min       0/1 – Böen >= Schwellwert in <30 min
-haus/wetter/inca/bald_sturm_60min       0/1 – Böen >= Schwellwert in <60 min
-haus/wetter/inca/minuten_bis_regen      Minuten bis nächster Regen, -1 = kein Regen geplant
-```
-
-### Notifications (Loxone Push)
-
-```
-haus/wetter/notification/geosphere      Alle GeoSphere-Warnungen als Text
-haus/wetter/notification/inca           INCA Nowcast-Zusammenfassung
-haus/wetter/notification/alle           Kombination aus beidem
-haus/wetter/notification/neu_geosphere  1 wenn neue Warnungen (retain=false, Puls)
-haus/wetter/notification/entwarnung     Text wenn alle Warnungen aufgehoben (retain=false)
-haus/wetter/letztes_update              Zeitstempel letztes Update
-```
-
----
-
-## Loxone Miniserver Einrichtung
-
-1. Im **Loxone Config**: Virtuellen HTTP-Eingang oder MQTT-Verbindung zum LoxBerry MQTT Gateway einrichten
-2. Virtuelle Eingänge für gewünschte Topics anlegen
-3. Für Push-Nachrichten: Topic `notification/alle` abonnieren und in Notification-Block einspeisen
-
----
-
-## Fehlerdiagnose
-
-### Daemon startet nicht
-
-```bash
-# Per SSH auf LoxBerry
-sudo /opt/loxberry/system/daemons/plugins/unwetter4lox start
-
-# Status prüfen
-sudo /opt/loxberry/system/daemons/plugins/unwetter4lox status
-
-# Log prüfen
-cat /opt/loxberry/log/plugins/unwetter4lox/unwetter4lox.log
-```
-
-### paho-mqtt fehlt
-
-```bash
-pip3 install paho-mqtt
-# oder:
-sudo apt-get install python3-paho-mqtt
-```
-
-### MQTT-Verbindung schlägt fehl
-
-- LoxBerry MQTT Gateway Plugin installiert und aktiv?
-- Bei manueller Konfiguration: Broker-IP und Port in den Plugin-Einstellungen prüfen
-
----
-
-## Entwicklung / Build
-
-```bash
-# ZIP für LoxBerry Plugin-Installer erstellen
-./create-plugin-zip.sh
-```
+Das Plugin kombiniert drei unabhängige Datenquellen zu einem **aggregierten Gesamtstatus** (Alarm-Blöcke), der sofort anzeigt: Gibt es gerade Gewitter-, Wind-, Regen-, Hagel- oder Schneegefahr?
 
 ---
 
 ## Datenquellen
 
-- **GeoSphere Austria Warn-API**: `https://warnungen.zamg.at/wsapp/api/`  
-  Kostenlos, keine API-Key erforderlich, österreichweite Wetterwarnungen
+### 1. GeoSphere Austria – Offizielle Wetterwarnungen (ZAMG)
 
-- **GeoSphere Dataset API (INCA)**: `https://dataset.api.hub.geosphere.at/`  
-  Kostenlos, keine API-Key erforderlich, Nowcast-Daten für Österreich
+Die offiziellen Warnungen der österreichischen Wetterbehörde für 8 Wettertypen:
+- **Wind/Sturm** – ab 60 km/h Böen
+- **Regen/Überflutung** – Starkregen, Hochwassergefahr
+- **Schnee/Eis** – Schneefall, Glatteis
+- **Gewitter** – mit und ohne Hagel
+- **Hagel** – separater Hagelwarner
+- **Hitze** – Hitzewellen
+- **Kälte** – Frostwarnungen
+
+Warnstufen: 1 (Gelb) bis 4 (Lila/Extrem). Das Plugin prüft alle aktiven Warnungen und Vorwarnungen für deinen Standort.
+
+**API:** `https://warnungen.zamg.at/wsapp/api/getWarnings`
+
+### 2. INCA Nowcast – 15-Minuten-Kurzvorhersage
+
+Hochauflösende Vorhersage für die nächsten 60 Minuten (Schritte à 15 Minuten) direkt für deine GPS-Koordinaten:
+- Aktueller Niederschlag (mm/h) und Niederschlagstyp
+- Böenstärke (km/h) – maximale Böen in den nächsten 60 Minuten
+- Hagelgefahr (Ja/Nein)
+- Minuten bis zum nächsten Regen (oder -1 wenn aktuell trocken bleibt)
+- Temperatur, Luftdruck, Luftfeuchtigkeit (aktuelle Werte)
+
+Die INCA-Daten eignen sich ideal für reaktive Automatisierungen: Beschattung bei nahenden Böen einfahren, Bewässerung 15 Minuten vor Regenfront stoppen.
+
+**API:** `https://dataset.api.hub.geosphere.at/v1/timeseries/historical/inca-v1-1h-1km`
+
+### 3. TAWES 360° – Echtzeit-Wetterstationsnetz
+
+Das Plugin sucht automatisch alle TAWES-Wetterstationen der GeoSphere Austria im einstellbaren Umkreis (Standard: 120 km) und wertet deren Echtzeitmessungen aus. Daraus werden berechnet:
+
+- **Dominante Windrichtung** – vektorgewichtet aus allen Stationen (sin/cos-Methode, korrekte Kreisstatistik)
+- **Upstream-Stationen** – welche Stationen liegen in der Anströmrichtung? Diese sind besonders relevant, weil das Wetter von dort kommt.
+- **Maximale Böen upstream** – schlimmste Böen die aus der Windrichtung kommen
+- **Wind-Trend** – Steigt oder fällt die Windgeschwindigkeit? (Lineare Regression über 2 Stunden)
+- **Regenfront** – Bewegt sich Regen auf deinen Standort zu? Wenn ja: Frontgeschwindigkeit und ETA in Minuten
+- **Gewittersignal** – Kombination aus Luftdruckabfall + Luftfeuchtigkeitsanstieg + rasant steigenden Böen
+- **Luftdrucktrend** – Steigt oder fällt der Luftdruck? (Regression über 2 Stunden)
+
+Die TAWES-Daten werden im 2-Stunden-Ringpuffer (12 × 10-Minuten-Intervalle) gespeichert für Trendberechnungen.
+
+**API:** `https://dataset.api.hub.geosphere.at/v1/station/current/tawes-v1-10min`
 
 ---
 
-## Lizenz
+## Aggregierter Gesamtstatus (Alarm)
 
-MIT License – © 2026 Stefan Hörmandinger / HitSmart
+Alle drei Quellen werden automatisch zu einem einheitlichen Gesamtstatus zusammengeführt:
+
+| Kategorie | Quellen |
+|:---|:---|
+| Gewitter | ZAMG Gewitterwarnung + TAWES Gewittersignal |
+| Wind/Sturm | ZAMG Windwarnung + INCA Böen + TAWES Upstream-Böen |
+| Regen | ZAMG Regenwarnung + INCA Niederschlag + TAWES Regenfront |
+| Hagel | ZAMG Hagelwarnung + INCA Hagelgefahr |
+| Schnee/Eis | ZAMG Schnee/Glatteis-Warnung |
+
+Alarmstufen: `0` = Keine, `1` = Möglich, `2` = Aktiv, `3` = AKUT
+
+---
+
+## MQTT Schnittstelle (vollständige Referenz)
+
+Standard-Präfix: `unwetter/` (konfigurierbar in den Einstellungen)
+
+Alle Topics werden mit `retain=true` publiziert, damit Loxone den letzten Wert sofort nach Verbindungsaufbau erhält.
+
+### System-Topics
+
+| Topic | Beschreibung | Werte |
+|:---|:---|:---|
+| `status` | Systemzustand des Daemons | `OK` / `Error - [Quelle]` |
+| `letzter_abruf_datum` | Zeitstempel des letzten Abrufs | `07.06.2026 14:30:00` |
+| `letzter_abruf_epoch` | Unix-Timestamp des letzten Abrufs | `1749303000` |
+
+### Gesamtstatus-Topics (alarm/)
+
+Diese Topics kombinieren alle drei Quellen zu einheitlichen Alarm-Leveln. Ideal für Loxone-Automatisierungen.
+
+| Topic | Beschreibung | Werte |
+|:---|:---|:---|
+| `alarm/gewitter` | Gewittergefahr kombiniert | `0`=Keine, `1`=Möglich, `2`=Aktiv, `3`=AKUT |
+| `alarm/wind` | Windgefahr kombiniert | `0`=Keine, `1`=Möglich, `2`=Aktiv, `3`=AKUT |
+| `alarm/regen` | Regenrisiko kombiniert | `0`=Keine, `1`=Möglich, `2`=Aktiv |
+| `alarm/hagel` | Hagelgefahr kombiniert | `0`=Keine, `1`=Möglich, `2`=Aktiv |
+| `alarm/schnee` | Schnee/Eisrisiko kombiniert | `0`=Keine, `1`=Möglich, `2`=Aktiv |
+| `alarm/stufe` | Höchste ZAMG-Warnstufe | `0`–`4` |
+| `alarm/zusammenfassung` | Kurzzusammenfassung | `Gewitter AKUT, Wind aktiv` / `Keine Warnungen` |
+
+### GeoSphere Austria Warnungen (zamg/)
+
+| Topic | Beschreibung | Werte |
+|:---|:---|:---|
+| `zamg/max_stufe` | Höchste aktive Warnstufe | `0` (Keine) bis `4` (Lila/Extrem) |
+| `zamg/irgendwas_aktiv` | Mindestens eine aktive/baldige Warnung | `0` / `1` |
+| `zamg/{typ}/stufe` | Warnstufe je Typ | `0`–`4` |
+| `zamg/{typ}/aktiv` | Warnung gerade aktiv | `0` / `1` |
+| `zamg/{typ}/bald` | Warnung beginnt in < 6h | `0` / `1` |
+| `zamg/{typ}/notification` | Klartext für Push | `⚠️ ORANGE – Wind | heute 14:00 bis 20:00` |
+
+**Typen (`{typ}`):** `wind`, `regen`, `schnee`, `glatteis`, `gewitter`, `hagel`, `hitze`, `kaelte`
+
+**Warnstufen:** `1`=Gelb, `2`=Orange, `3`=Rot, `4`=Lila
+
+### INCA Nowcast (inca/)
+
+| Topic | Beschreibung | Einheit |
+|:---|:---|:---|
+| `inca/boen_max_60min` | Maximale Böen nächste 60 Min | km/h |
+| `inca/niederschlag` | Aktueller Niederschlag | mm/h |
+| `inca/minuten_bis_regen` | Zeit bis Regenstart | Minuten (`-1` = bleibt trocken) |
+| `inca/bald_hagel` | Hagelgefahr in < 60 Min | `0` / `1` |
+| `inca/niederschlag_typ` | Art des Niederschlags | `Regen`, `Schnee`, `Hagel`, `Trocken` |
+| `inca/temperatur` | Aktuelle Temperatur | °C |
+| `inca/luftfeuchtigkeit` | Aktuelle Luftfeuchtigkeit | % |
+| `inca/luftdruck` | Aktueller Luftdruck | hPa |
+| `inca/windgeschwindigkeit` | Aktuelle Windgeschwindigkeit | km/h |
+| `inca/windrichtung` | Aktuelle Windrichtung | Grad (0–360) |
+| `inca/globalstrahlung` | Solarstrahlung | W/m² |
+| `inca/akut_warnung` | Akute Warnung aktiv | `0` / `1` |
+| `inca/notification` | Klartext für Push | `💨 Böen 72 km/h in 15 min` |
+
+### TAWES 360° Stationsdaten (tawes/)
+
+| Topic | Beschreibung | Einheit/Werte |
+|:---|:---|:---|
+| `tawes/windrichtung` | Dominante Windrichtung (vektorgewichtet) | Grad (0–360) |
+| `tawes/windrichtung_name` | Windrichtung als Text | `N`, `NE`, `E`, `SE`, `S`, `SW`, `W`, `NW` |
+| `tawes/upstream_count` | Anzahl aktiver Upstream-Stationen | Ganzzahl |
+| `tawes/wind_upstream_max` | Max. Böen aus Anströmrichtung | km/h |
+| `tawes/wind_trend` | Wind-Trendstärke (Regression 2h) | km/h pro 10 Min, positiv=steigend |
+| `tawes/regen_upstream` | Regen aus Anströmrichtung | `0` (Nein) / `1` (Ja) |
+| `tawes/regen_eta_min` | Minuten bis Regenfront ankommt | Minuten (`-1` = ETA unbekannt) |
+| `tawes/front_speed_kmh` | Geschwindigkeit der Regenfront | km/h |
+| `tawes/gewitter_signal` | Gewitterindikator | `0`=Nein, `1`=Möglich, `2`=Akut |
+| `tawes/druck_trend` | Luftdrucktrend (Regression 2h) | hPa pro 10 Min, negativ=fallend |
+| `tawes/stationen_anzahl` | Stationen im konfigurierten Radius | Ganzzahl |
+| `tawes/letztes_update` | Zeitstempel letzter TAWES-Abruf | ISO-Timestamp |
+| `tawes/confidence` | Datenzuverlässigkeit | `0.0`–`1.0` |
+
+### Notifications (notification/)
+
+| Topic | Beschreibung |
+|:---|:---|
+| `notification/geosphere` | ZAMG-Warnungen kombiniert als Klartext |
+| `notification/inca` | INCA-Meldung als Klartext |
+| `notification/tawes` | TAWES-Meldung als Klartext |
+| `notification/alle` | Alle drei Quellen kombiniert (durch `──` getrennt) |
+
+---
+
+## Installation
+
+1. ZIP-Datei über den **LoxBerry Plugin Manager** installieren
+2. In die **Einstellungen** wechseln
+3. **Standort festlegen** – Adresse eingeben und auf "Suchen" klicken, oder über den Button "Vom Loxone Miniserver" automatisch den Miniserver-Standort übernehmen
+4. Dienste aktivieren: **GeoSphere (ZAMG)**, **INCA Nowcast**, **TAWES 360°**
+5. MQTT-Broker einstellen (Standard: LoxBerry MQTT Gateway automatisch)
+6. Daemon im **Status-Tab** starten
+7. In **Loxone Pro**: MQTT Virtual Inputs für die gewünschten Topics anlegen
+
+### Mindestanforderungen
+
+- LoxBerry 2.x oder höher
+- LoxBerry MQTT Gateway installiert und konfiguriert (oder manuell MQTT-Broker)
+- Python 3.7+
+- Internetverbindung zu GeoSphere Austria APIs
+
+---
+
+## Loxone Integration
+
+### Empfohlene Virtual Inputs
+
+```
+# Gesamtstatus (einfachste Integration)
+MQTT Topic: unwetter/alarm/gewitter   → Virtueller Eingang "Gewittergefahr"
+MQTT Topic: unwetter/alarm/wind       → Virtueller Eingang "Windgefahr"
+MQTT Topic: unwetter/alarm/regen      → Virtueller Eingang "Regenrisiko"
+
+# INCA für Echtzeit-Automatisierungen
+MQTT Topic: unwetter/inca/boen_max_60min     → Virtueller Eingang "Böen 60min"
+MQTT Topic: unwetter/inca/minuten_bis_regen  → Virtueller Eingang "Min bis Regen"
+MQTT Topic: unwetter/inca/bald_hagel         → Virtueller Eingang "Hagelgefahr"
+
+# ZAMG für Warnstufen
+MQTT Topic: unwetter/zamg/max_stufe          → Virtueller Eingang "ZAMG Warnstufe"
+MQTT Topic: unwetter/zamg/wind/stufe         → Virtueller Eingang "Windwarnstufe"
+```
+
+### Automatisierungsbeispiele
+
+**Markisen automatisch einfahren:**
+- Auslöser: `alarm/wind` ≥ 2 ODER `inca/boen_max_60min` > 50
+
+**Bewässerung stoppen:**
+- Auslöser: `inca/minuten_bis_regen` ≥ 0 UND `inca/minuten_bis_regen` < 30
+
+**Push-Benachrichtigung bei Unwetter:**
+- Auslöser: `alarm/gewitter` ≥ 2 ODER `zamg/max_stufe` ≥ 2
+- Nachricht: `notification/alle`
+
+---
+
+## Einstellungen
+
+| Option | Beschreibung | Standard |
+|:---|:---|:---|
+| Breitengrad / Längengrad | GPS-Koordinaten deines Standorts | – |
+| Abruf-Intervall | Wie oft Daten abgerufen werden | 300 Sekunden |
+| INCA aktivieren | INCA Nowcast einschalten | Ja |
+| INCA Zeithorizont | Vorschau-Fenster | 60 Minuten |
+| Böen-Alarmschwelle | Ab wann INCA Böen-Alarm auslöst | 60 km/h |
+| Min. Warnstufe | Ab welcher ZAMG-Stufe Notification | 1 (Gelb) |
+| TAWES aktivieren | TAWES 360° einschalten | Ja |
+| TAWES Stationsradius | Suchradius für Wetterstationen | 120 km |
+| MQTT Präfix | Präfix für alle MQTT Topics | `unwetter/` |
+| MQTT Broker | Broker-Host (Standard: LoxBerry auto) | automatisch |
+
+---
+
+## Datenquellen & Rechtliches
+
+Dieses Plugin nutzt ausschließlich öffentlich zugängliche Daten von [GeoSphere Austria](https://www.geosphere.at):
+
+- [GeoSphere Warn-API](https://warnungen.zamg.at) – Offizielle Wetterwarnungen
+- [INCA Nowcast](https://www.geosphere.at/de/daten-und-dienste) – Hochauflösende Kurzvorhersage
+- [TAWES Stationsdaten](https://dataset.api.hub.geosphere.at) – Echtzeit-Messstationen
+
+Geocoding via [Nominatim / OpenStreetMap](https://nominatim.org) (kostenlos, kein API-Key nötig).
+
+**Haftungsausschluss:** Die Daten dienen der Information und Hausautomation. Für die Richtigkeit der Wettervorhersagen und daraus resultierende automatisierte Handlungen wird keine Haftung übernommen.
+
+---
+
+## Entwickler
+
+- **Autor:** HitSmart / Stefan Hörmandinger
+- **GitHub:** [HitsmartDev/Unwetter4Lox](https://github.com/HitsmartDev/Unwetter4Lox)
+- **Lizenz:** MIT

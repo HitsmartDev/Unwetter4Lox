@@ -88,11 +88,13 @@ LBWeb::lbheader($L['MAIN.TITLE'] . " – " . $L['MAIN.SETTINGS'], "https://wiki.
 <h3>📍 <?= $L['MAIN.LOCATION'] ?> & Geocoding</h3>
 <div class="ui-field-contain">
     <label for="addr_search"><b><?= $L['MAIN.ADDR_SEARCH'] ?></b></label>
-    <div style="display:flex; gap:10px">
-        <input type="text" id="addr_search" placeholder="<?= $L['MAIN.ADDR_PLACEHOLDER'] ?>" style="flex-grow:2">
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center">
+        <input type="text" id="addr_search" placeholder="<?= $L['MAIN.ADDR_PLACEHOLDER'] ?>" style="flex:1; min-width:150px">
         <button type="button" id="btn_geocode" data-role="button" data-icon="search" data-mini="true" data-inline="true"><?= $L['MAIN.GEOCODE_BTN'] ?></button>
+        <button type="button" id="btn_miniserver" data-role="button" data-icon="home" data-mini="true" data-inline="true"><?= $L['MAIN.FROM_MINISERVER'] ?></button>
     </div>
-    <p style="font-size:10px; color:#888; margin:4px 0">Sucht via OpenStreetMap automatisch nach Koordinaten.</p>
+    <div id="ms_status" style="display:none; font-size:11px; margin:4px 0; padding:4px 8px; background:#f0f7ff; border-radius:3px"></div>
+    <p style="font-size:10px; color:#888; margin:4px 0">Koordinaten via OpenStreetMap suchen, oder direkt vom verbundenen Loxone Miniserver übernehmen.</p>
 </div>
 
 <hr style="opacity:0.2">
@@ -124,9 +126,27 @@ $(function(){
             } else {
                 $('#lat').val(parseFloat(data.lat).toFixed(6));
                 $('#lon').val(parseFloat(data.lon).toFixed(6));
-                // Bezeichnung wird NICHT ueberschrieben (Anforderung 2)
                 alert('<?= $L['MAIN.GEOCODE_SUCCESS'] ?>');
             }
+        });
+    });
+
+    $('#btn_miniserver').on('click', function(){
+        $(this).addClass('ui-disabled');
+        $('#ms_status').text('<?= addslashes($L['MAIN.MINISERVER_LOADING']) ?>').show();
+        $.getJSON('ajax.php?action=get_miniserver_coords', function(data) {
+            $('#btn_miniserver').removeClass('ui-disabled');
+            if(data.error) {
+                $('#ms_status').html('❌ ' + data.error);
+                if(data.suggestion) $('#addr_search').val(data.suggestion);
+            } else {
+                $('#lat').val(parseFloat(data.lat).toFixed(6));
+                $('#lon').val(parseFloat(data.lon).toFixed(6));
+                $('#ms_status').html('✅ ' + data.display_name.split(',')[0] + ' (Quelle: ' + data.source + ')');
+            }
+        }).fail(function(){
+            $('#btn_miniserver').removeClass('ui-disabled');
+            $('#ms_status').text('❌ Verbindungsfehler');
         });
     });
 });
@@ -236,22 +256,25 @@ $(function(){
 <div data-role="collapsible" data-collapsed="true" data-theme="a" data-content-theme="a">
 <h3>⚙️ <?= $L['MAIN.INTERVAL'] ?> & Schwellen</h3>
 <div class="ui-field-contain">
-    <label for="interval">Sekunden: <span id="iv"><?= v('SCHEDULE','INTERVAL','300') ?></span>s</label>
+    <label for="interval"><?= $L['MAIN.INTERVAL'] ?>: <span id="iv"><?= v('SCHEDULE','INTERVAL','300') ?></span>s <small style="color:#888">(<?= $L['MAIN.LABEL_DEFAULT'] ?>: 300s)</small></label>
     <input type="range" id="interval" name="interval" min="60" max="900" step="30"
            value="<?= v('SCHEDULE','INTERVAL','300') ?>"
            oninput="document.getElementById('iv').textContent=this.value">
+    <p style="font-size:10px;color:#888;margin:2px 0">Wie oft der Daemon die Wetter-APIs abfragt. TAWES-Stationen werden immer nur alle 10 Minuten abgerufen.</p>
 </div>
 <div class="ui-field-contain">
-    <label for="inca_horizon"><?= $L['MAIN.HORIZON'] ?>: <span id="ih"><?= v('INCA','HORIZON_MINUTES','60') ?></span> min</label>
+    <label for="inca_horizon"><?= $L['MAIN.HORIZON'] ?>: <span id="ih"><?= v('INCA','HORIZON_MINUTES','60') ?></span> min <small style="color:#888">(<?= $L['MAIN.LABEL_DEFAULT'] ?>: 60 min)</small></label>
     <input type="range" id="inca_horizon" name="inca_horizon" min="15" max="60" step="15"
            value="<?= v('INCA','HORIZON_MINUTES','60') ?>"
            oninput="document.getElementById('ih').textContent=this.value">
+    <p style="font-size:10px;color:#888;margin:2px 0">Wie weit der INCA Nowcast in die Zukunft schaut (15–60 Minuten).</p>
 </div>
 <div class="ui-field-contain">
-    <label for="boen_alarm"><?= $L['MAIN.BOEN_ALARM'] ?>: <span id="ba"><?= v('THRESHOLDS','BOEN_ALARM','60') ?></span> km/h</label>
+    <label for="boen_alarm"><?= $L['MAIN.BOEN_ALARM'] ?>: <span id="ba"><?= v('THRESHOLDS','BOEN_ALARM','60') ?></span> km/h <small style="color:#888">(<?= $L['MAIN.LABEL_DEFAULT'] ?>: 60 km/h)</small></label>
     <input type="range" id="boen_alarm" name="boen_alarm" min="20" max="120" step="5"
            value="<?= v('THRESHOLDS','BOEN_ALARM','60') ?>"
            oninput="document.getElementById('ba').textContent=this.value">
+    <p style="font-size:10px;color:#888;margin:2px 0">Ab welchen Böen-Spitzen (km/h) ein Windalarm ausgelöst wird. Empfehlung: 60 km/h (Beaufort 8).</p>
 </div>
 </div>
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Unwetter4Lox Daemon v0.3.1 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
+"""Unwetter4Lox Daemon v0.4.0 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math
 from datetime import datetime, timezone, timedelta
 from collections import deque
@@ -239,7 +239,7 @@ def publish(topic, value, retain=True):
 
 def fetch_json(url, provider):
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Unwetter4Lox/0.3.1'})
+        req = urllib.request.Request(url, headers={'User-Agent': 'Unwetter4Lox/0.4.0'})
         with urllib.request.urlopen(req, timeout=15) as r: return json.loads(r.read().decode())
     except Exception as e: log.error(f'HTTP {provider}: {e}'); return None
 
@@ -599,6 +599,79 @@ def publish_tawes(tawes):
     publish('notification/tawes', tawes.get('notification', ''))
 
 # ---------------------------------------------------------------------------
+# Aggregierter Alarm-Status (alle Quellen kombiniert → alarm/ Topics)
+# ---------------------------------------------------------------------------
+def build_alarm(zamg, inca, tawes, akut):
+    """Kombiniert ZAMG + INCA + TAWES zu einem einheitlichen Alarm-Dict.
+    Level: 0=keine, 1=möglich/Vorsicht, 2=aktiv/Warnung, 3=akut/extrem"""
+
+    # Gewitter
+    gewitter = 0
+    if zamg.get('gewitter', {}).get('stufe', 0) >= 1: gewitter = 1
+    if zamg.get('gewitter', {}).get('aktiv', 0):      gewitter = 2
+    tawes_g = tawes.get('gewitter_signal', 0)
+    gewitter = max(gewitter, tawes_g)
+    if akut: gewitter = max(gewitter, 2)
+
+    # Wind
+    wind = zamg.get('wind', {}).get('stufe', 0)
+    if wind > 0 and zamg.get('wind', {}).get('aktiv', 0): wind = min(3, wind + 1)
+    if inca.get('bald_sturm_30'): wind = max(wind, 2)
+    elif inca.get('bald_sturm_60'): wind = max(wind, 1)
+    if tawes.get('sturm_upstream'): wind = max(wind, 1)
+
+    # Regen
+    regen = 0
+    if zamg.get('regen', {}).get('stufe', 0) >= 1: regen = 1
+    if zamg.get('regen', {}).get('aktiv', 0):      regen = 2
+    if inca.get('bald_regen') or inca.get('rr_jetzt', 0) > 0.2: regen = max(regen, 1)
+    if tawes.get('regen_upstream'):
+        eta = tawes.get('regen_eta_min', -1)
+        regen = max(regen, 2 if 0 <= eta <= 30 else 1)
+
+    # Hagel
+    hagel = 0
+    if zamg.get('hagel', {}).get('stufe', 0) >= 1: hagel = 1
+    if zamg.get('hagel', {}).get('aktiv', 0):      hagel = 2
+    if inca.get('bald_hagel'): hagel = max(hagel, 1)
+    if inca.get('bald_graupel'): hagel = max(hagel, 1)
+
+    # Schnee/Eis
+    schnee = max(zamg.get('schnee', {}).get('stufe', 0), zamg.get('glatteis', {}).get('stufe', 0))
+    if schnee > 0 and (zamg.get('schnee', {}).get('aktiv') or zamg.get('glatteis', {}).get('aktiv')): schnee = min(3, schnee + 1)
+    if inca.get('pt_jetzt') in [2, 3]: schnee = max(schnee, 1)
+
+    # Gesamtstufe (max aus ZAMG)
+    all_types = list(WARN_TYPES.values()) + ['hagel']
+    max_stufe = max((zamg.get(t, {}).get('stufe', 0) for t in all_types), default=0)
+
+    # Zusammenfassung
+    parts = []
+    if gewitter >= 2: parts.append('⚡ Gewitter AKUT')
+    elif gewitter:    parts.append('⚡ Gewitter möglich')
+    if wind >= 3:     parts.append('💨 Extremsturm')
+    elif wind == 2:   parts.append('💨 Sturm')
+    elif wind:        parts.append('💨 Erhöhte Windgefahr')
+    if hagel >= 2:    parts.append('🌨 Hagel AKTIV')
+    elif hagel:       parts.append('🌨 Hagelgefahr')
+    if regen == 2:    parts.append('🌧 Starkregen')
+    elif regen:       parts.append('🌧 Regen erwartet')
+    if schnee >= 2:   parts.append('❄️ Schnee/Eis AKTIV')
+    elif schnee:      parts.append('❄️ Schnee/Eis möglich')
+    zusammenfassung = ' | '.join(parts) if parts else '✅ Keine Warnungen'
+
+    return {
+        'gewitter': gewitter, 'wind': wind, 'regen': regen,
+        'hagel': hagel, 'schnee': schnee, 'stufe': int(max_stufe),
+        'zusammenfassung': zusammenfassung
+    }
+
+def publish_alarm(alarm):
+    for k in ['gewitter', 'wind', 'regen', 'hagel', 'schnee', 'stufe']:
+        publish(f'alarm/{k}', alarm.get(k, 0))
+    publish('alarm/zusammenfassung', alarm.get('zusammenfassung', ''))
+
+# ---------------------------------------------------------------------------
 # State
 # ---------------------------------------------------------------------------
 def load_state():
@@ -647,20 +720,24 @@ def publish_all(zamg, akut, inca, prev_ids, new_ids, status_msg, tawes=None):
         if inca.get('bald_regen'): i_lines.append(L['regen_in'].format(v=m))
         elif inca.get('rr_jetzt', 0) > 0: i_lines.append(L['regen_jetzt'].format(v=inca["rr_jetzt"]))
         if not i_lines: i_lines.append(L['kein_alarm'].format(v=inca.get("fx_jetzt", 0)))
-    n_geo  = '\n'.join(z_lines) if z_lines else L['no_warns']
-    n_inca = '\n'.join(i_lines) if i_lines else L['no_warns']
+    n_geo   = '\n'.join(z_lines) if z_lines else L['no_warns']
+    n_inca  = '\n'.join(i_lines) if i_lines else L['no_warns']
+    n_tawes = (tawes or {}).get('notification', '')
+    n_alle  = '\n──\n'.join(filter(None, [n_geo if z_lines else '', n_inca if i_lines else '', n_tawes])) or n_inca
     publish('notification/geosphere', n_geo)
     publish('notification/inca', n_inca)
-    publish('notification/alle', n_geo + '\n──\n' + n_inca if z_lines else n_inca)
+    publish('notification/tawes', n_tawes)
+    publish('notification/alle', n_alle)
     now = datetime.now().astimezone(); ts_iso = now.strftime('%d.%m.%Y %H:%M:%S'); ts_epoch = int(now.timestamp())
-    publish('letztes_update', ts_iso); publish('letzter_abruf_datum', ts_iso); publish('letzter_abruf_epoch', ts_epoch)
+    publish('letzter_abruf_datum', ts_iso); publish('letzter_abruf_epoch', ts_epoch)
     publish('status', L['status_ok'] if status_msg == 'OK' else L['status_err'].format(v=status_msg))
+    alarm = build_alarm(zamg, inca, tawes or {}, akut)
+    publish_alarm(alarm)
     save_state({
         'last_warn_ids': new_ids, 'hatte_aktiv': bool(irgendwas), 'letztes_update': ts_iso,
         'letzter_abruf_epoch': ts_epoch, 'status': status_msg, 'zamg': zamg, 'inca': inca,
         'akutwarnung': akut, 'max_stufe': int(max_stufe), 'irgendwas_aktiv': irgendwas,
-        'notification_alle': n_geo + '\n──\n' + n_inca if z_lines else n_inca,
-        'tawes': tawes if tawes else {},
+        'notification_alle': n_alle, 'alarm': alarm, 'tawes': tawes if tawes else {},
     })
 
 # ---------------------------------------------------------------------------
@@ -668,7 +745,7 @@ def publish_all(zamg, akut, inca, prev_ids, new_ids, status_msg, tawes=None):
 # ---------------------------------------------------------------------------
 def run():
     global _tawes_last_fetch
-    log.info(f'Unwetter4Lox v0.3.0 gestartet | {LAT},{LON} | Lang={LBLANG}')
+    log.info(f'Unwetter4Lox v0.4.0 gestartet | {LAT},{LON} | Lang={LBLANG}')
     _tawes_last_fetch = 0
     while True:
         try:

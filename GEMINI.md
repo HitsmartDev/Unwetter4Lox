@@ -6,25 +6,33 @@ LoxBerry-Plugin: Österreichische Unwetterwarnungen (GeoSphere Austria API + INC
 
 ## Sync-Instruktionen
 
-1. **Beim Start:** `aimemory.md` lesen (Aktueller Stand: v0.3.0).
+1. **Beim Start:** `aimemory.md` lesen (Aktueller Stand: v0.4.0).
 2. **Beim Abschluss / Wechsel zu Claude:** `aimemory.md` aktualisieren.
 
 ---
 
-## Architektur-Leitplanken (v0.3.0+)
+## Architektur-Leitplanken (v0.4.0+)
 
 ### MQTT & Topics
-- **Hierarchie:** `{prefix}/zamg/`, `{prefix}/inca/`, `{prefix}/tawes/`, `{prefix}/notification/`
-- **TAWES-Topics (neu):** `tawes/dominante_windrichtung`, `tawes/regen_eta_min`, `tawes/gewitter_signal`, `tawes/notification` u.v.m.
+- **Hierarchie:** `{prefix}/zamg/`, `{prefix}/inca/`, `{prefix}/tawes/`, `{prefix}/notification/`, `{prefix}/alarm/`
+- **alarm/-Topics (neu in v0.4.0):** `alarm/gewitter`, `alarm/wind`, `alarm/regen`, `alarm/hagel`, `alarm/schnee`, `alarm/stufe`, `alarm/zusammenfassung` – kombinieren alle 3 Quellen
 - **Multilang:** Texte in MQTT-Payloads müssen lokalisiert sein (T-Dictionary im Daemon).
 
-### TAWES 360° Korrelation (neu in v0.3.0)
+### TAWES 360° Korrelation (v0.4.0 Bugfixes)
+- **Windrichtung:** Vektorgewichteter Durchschnitt via sin/cos (korrekte Kreisstatistik – kein Median)
+- **Linreg:** None-Werte intern gefiltert, min. 4 Datenpunkte erforderlich
+- **Gewitter Level 2:** zusätzlich wenn FFX-Slope > 3.0 km/h/10min (akutes Gewitter)
 - **Alle 10min** (480s Threshold im run()-Loop) wird `correlate_tawes()` aufgerufen.
 - **Stationen-Cache:** `tawes_stations.json` im DATADIR, täglich von API erneuert.
 - **Ring-Buffer:** `collections.deque(maxlen=12)` pro Station = 2h Messdaten.
 - **Upstream:** Bearing-Differenz < 70° zur dominanten Windrichtung.
 - **Konfidenz:** 0–100%, zusammengesetzt aus Stationsanzahl, Frontgeschwindigkeit, Windkonsistenz, Trend.
-- **Gewitter-Signal:** Druckabfall < -0.5 hPa/10min **und** Feuchte > 85% bei nächster Upstream-Station.
+
+### Aggregierter Gesamtstatus (build_alarm)
+- `build_alarm(zamg, inca, tawes, akut)` in `daemon.py` kombiniert alle 3 Quellen
+- Alarm-Level: `0`=Keine, `1`=Möglich, `2`=Aktiv, `3`=AKUT
+- Wird in `state.json` unter Key `alarm` gespeichert
+- `index.php` liest `state['alarm']` und zeigt Gesamtstatus-Block ganz oben
 
 ### Internationalisierung (i18n)
 - **Standard:** Immer DE und EN unterstützen.

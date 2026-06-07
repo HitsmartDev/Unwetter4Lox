@@ -14,6 +14,19 @@ export LBHOMEDIR LBPPLUGINDIR
 
 case "$1" in
     start)
+        # Prüfung auf gesetzte Koordinaten
+        CFGFILE="${LBHOMEDIR}/config/plugins/${LBPPLUGINDIR}/unwetter4lox.cfg"
+        if [ ! -f "$CFGFILE" ]; then
+            echo "Fehler: Konfigurationsdatei fehlt."
+            exit 1
+        fi
+        LAT=$(grep "^LAT=" "$CFGFILE" | cut -d= -f2 | tr -d ' ' | tr -d '\r')
+        LON=$(grep "^LON=" "$CFGFILE" | cut -d= -f2 | tr -d ' ' | tr -d '\r')
+        if [ -z "$LAT" ] || [ -z "$LON" ]; then
+            echo "Fehler: Standort nicht konfiguriert (LAT/LON fehlen)."
+            exit 1
+        fi
+
         if [ -f "$PIDFILE" ] && kill -0 "$(cat $PIDFILE)" 2>/dev/null; then
             echo "Daemon laeuft bereits (PID $(cat $PIDFILE))"
             exit 0
