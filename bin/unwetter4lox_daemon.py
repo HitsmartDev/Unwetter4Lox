@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Unwetter4Lox Daemon v0.3.0 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
+"""Unwetter4Lox Daemon v0.3.1 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math
 from datetime import datetime, timezone, timedelta
 from collections import deque
@@ -239,7 +239,7 @@ def publish(topic, value, retain=True):
 
 def fetch_json(url, provider):
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Unwetter4Lox/0.3.0'})
+        req = urllib.request.Request(url, headers={'User-Agent': 'Unwetter4Lox/0.3.1'})
         with urllib.request.urlopen(req, timeout=15) as r: return json.loads(r.read().decode())
     except Exception as e: log.error(f'HTTP {provider}: {e}'); return None
 
@@ -334,11 +334,12 @@ def _bearing_to_name(b):
     dirs = ['N','NNO','NO','ONO','O','OSO','SO','SSO','S','SSW','SW','WSW','W','WNW','NW','NNW']
     return dirs[round(b / 22.5) % 16]
 
-def _linreg_slope(y):
-    """Lineare Regression, gibt Steigung zurück (ohne numpy)."""
+def _linreg_slope(series):
+    """Lineare Regression ohne numpy. Filtert None-Werte, min. 4 Punkte nötig."""
+    y = [v for v in series if v is not None]
     n = len(y)
-    if n < 2: return 0.0
-    xm = (n - 1) / 2; ym = sum(y) / n
+    if n < 4: return 0.0
+    xm = (n - 1) / 2.0; ym = sum(y) / n
     denom = sum((i - xm)**2 for i in range(n))
     if denom == 0: return 0.0
     return sum((i - xm) * (v - ym) for i, v in enumerate(y)) / denom
@@ -431,12 +432,22 @@ def correlate_tawes():
             TAWES_BUFFER[sid] = deque(maxlen=12)
         TAWES_BUFFER[sid].append(vals)
 
-    # Schritt 1: Dominante Windrichtung (Median aller Stationen mit FF > 1 m/s)
-    dd_vals = [raw_data[sid]['DD'] for sid in raw_data
-               if raw_data[sid].get('FF') is not None and raw_data[sid]['FF'] > 1.0
-               and raw_data[sid].get('DD') is not None]
-    dominante_wr = sorted(dd_vals)[len(dd_vals)//2] if dd_vals else 0.0
-    dominante_wr_name = _bearing_to_name(dominante_wr) if dd_vals else '–'
+    # Schritt 1: Dominante Windrichtung – vektorbasiert, gewichtet nach FF
+    # (Median schlägt bei Nordwind fehl: 350°+10° → Median 180° statt 0°)
+    sin_sum = cos_sum = 0.0; wr_count = 0
+    for sid in raw_data:
+        ff = raw_data[sid].get('FF'); dd = raw_data[sid].get('DD')
+        if ff is not None and dd is not None and ff > 1.0:
+            rad = math.radians(dd)
+            sin_sum += math.sin(rad) * ff
+            cos_sum += math.cos(rad) * ff
+            wr_count += 1
+    dd_vals = [wr_count]  # Nur noch als bool-Check ob Stationen mit Wind vorhanden
+    if wr_count > 0:
+        dominante_wr = (math.degrees(math.atan2(sin_sum, cos_sum)) + 360) % 360
+        dominante_wr_name = _bearing_to_name(dominante_wr)
+    else:
+        dominante_wr = 0.0; dominante_wr_name = '–'
 
     # Schritt 2: Upstream-Stationen dynamisch bestimmen (±70° Toleranz)
     upstream_list = []
@@ -446,7 +457,7 @@ def correlate_tawes():
         if sid not in raw_data: continue
         vals = raw_data[sid]
         ist_upstream = False
-        if dd_vals:
+        if wr_count > 0:
             bearing_home = (st['bearing'] + 180) % 360
             wind_to = (dominante_wr + 180) % 360
             diff = abs(wind_to - bearing_home)
@@ -502,35 +513,39 @@ def correlate_tawes():
             remaining_km = ns['dist_km'] - (elapsed_min / 60 * front_speed_kmh)
             regen_eta_min = int(remaining_km / front_speed_kmh * 60) if remaining_km > 0 else 0
 
-    # Schritt 5: Wind-Trend (nächste Upstream-Station)
+    # Schritt 5: Wind-Trend (nächste Upstream-Station, letzten 6 Buffer-Einträge)
     wind_trend = 0
     naechste_upstream = upstream_list[0] if upstream_list else (nearby[0] if nearby else None)
     if naechste_upstream:
         buf = list(TAWES_BUFFER.get(naechste_upstream['id'], []))
-        ffx_serie = [b['FFX'] for b in buf[-6:] if b.get('FFX') is not None]
-        if len(ffx_serie) >= 3:
-            slope = _linreg_slope([v * 3.6 for v in ffx_serie])
-            wind_trend = 1 if slope > 1.0 else (-1 if slope < -1.0 else 0)
+        ffx_raw = [b.get('FFX') for b in buf[-6:]]  # None-Filterung in _linreg_slope
+        slope = _linreg_slope([v * 3.6 for v in ffx_raw])
+        wind_trend = 1 if slope > 1.0 else (-1 if slope < -1.0 else 0)
 
     # Schritt 6: Konfidenz
     konfidenz = 0
     if len(upstream_mit_regen) >= 2: konfidenz += 40
     if 10 <= front_speed_kmh <= 150: konfidenz += 30
-    if naechste_upstream and naechste_upstream.get('DD') is not None and dd_vals:
+    if naechste_upstream and naechste_upstream.get('DD') is not None and wr_count > 0:
         diff = abs(naechste_upstream['DD'] - dominante_wr)
         if min(diff, 360 - diff) < 45: konfidenz += 20
     if wind_trend == 1: konfidenz += 10
 
-    # Schritt 7: Gewitter-Signal (Druckabfall + Feuchte)
+    # Schritt 7: Gewitter-Signal (Druckabfall + Feuchte + FFX-Anstieg)
+    # Level 1 = Gewittergefahr, Level 2 = akute Gefahr (zusätzlich Böen-Anstieg)
     gewitter_signal = 0; druck_trend = 0.0
     if naechste_upstream:
         buf = list(TAWES_BUFFER.get(naechste_upstream['id'], []))
-        p_serie = [b['P'] for b in buf[-6:] if b.get('P') is not None]
-        if len(p_serie) >= 3:
-            druck_trend = round(_linreg_slope(p_serie), 2)
-            rf = naechste_upstream.get('RF')
-            if druck_trend < -0.5 and rf is not None and rf > 85:
-                gewitter_signal = 1
+        p_raw  = [b.get('P')   for b in buf[-6:]]
+        ffx_raw_g = [b.get('FFX') for b in buf[-6:]]
+        druck_trend = round(_linreg_slope(p_raw), 2)
+        rf = naechste_upstream.get('RF')
+        if druck_trend < -0.5 and rf is not None and rf > 85:
+            gewitter_signal = 1
+            # Level 2: zusätzlich starker FFX-Anstieg upstream
+            ffx_slope = _linreg_slope([v * 3.6 for v in ffx_raw_g])
+            if ffx_slope > 3.0:
+                gewitter_signal = 2
 
     # Nächste Station Metadaten
     ns_name = naechste_upstream['name'] if naechste_upstream else '–'
@@ -541,7 +556,8 @@ def correlate_tawes():
     notif = ''
     if gewitter_signal:
         rf_val = (naechste_upstream or {}).get('RF', 0) or 0
-        notif = f'⚡ Druckabfall {abs(druck_trend):.1f} hPa/10min + {rf_val:.0f}% Feuchte → Gewittergefahr'
+        prefix = '🔴 AKUTE GEWITTERGEFAHR' if gewitter_signal == 2 else '⚡ Gewittergefahr'
+        notif = f'{prefix} | Druck {abs(druck_trend):.1f} hPa/10min + {rf_val:.0f}% Feuchte'
     elif sturm_upstream:
         trend_str = f' | Trend +{wind_trend} km/h/10min' if wind_trend > 0 else ''
         notif = f'💨 Sturmböen upstream {wind_upstream_kmh} km/h{trend_str}'
