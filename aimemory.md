@@ -1,5 +1,5 @@
 ## 📌 Projekt-Status
-- **Version:** 0.3.0 (Feature-Release)
+- **Version:** 0.3.1 (Bugfix-Release)
 - **Letzter Stand (Claude, 2026-06-07):**
   1. **TAWES 360° Korrelation** komplett implementiert in `daemon.py`:
      - `find_nearby_stations()`, `fetch_tawes_data()`, `correlate_tawes()`, `publish_tawes()`
