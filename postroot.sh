@@ -56,14 +56,28 @@ else
     exit 1
 fi
 
-# Config anlegen wenn noch nicht vorhanden
+# Config-Handling: Upgrade-Backup wiederherstellen ODER Default anlegen
 CFGDIR="${LBHOMEDIR}/config/plugins/${PLUGIN}"
 CFGFILE="${CFGDIR}/${PLUGIN}.cfg"
 CFGDEF="${CFGDIR}/${PLUGIN}.cfg.default"
-if [ -f "${CFGDEF}" ] && [ ! -f "${CFGFILE}" ]; then
+CFGBAK="${CFGDIR}/${PLUGIN}.cfg.upgrade_bak"
+
+if [ -f "${CFGBAK}" ]; then
+    mv "${CFGBAK}" "${CFGFILE}"
+    chown loxberry:loxberry "${CFGFILE}"
+    echo "<OK> Konfiguration aus Upgrade-Backup wiederhergestellt: ${CFGFILE}"
+elif [ -f "${CFGDEF}" ] && [ ! -f "${CFGFILE}" ]; then
     cp "${CFGDEF}" "${CFGFILE}"
     chown loxberry:loxberry "${CFGFILE}"
     echo "<OK> Standard-Config angelegt: ${CFGFILE}"
+else
+    echo "<INFO> Bestehende Config bleibt erhalten: ${CFGFILE}"
+fi
+
+# Neue Config-Sektionen ergänzen wenn noch nicht vorhanden (Upgrade-Migration)
+if [ -f "${CFGFILE}" ] && ! grep -q "^\[TAWES\]" "${CFGFILE}"; then
+    printf '\n[TAWES]\nENABLED=1\nMAX_DISTANCE_KM=120\n' >> "${CFGFILE}"
+    echo "<OK> TAWES-Sektion zur Config hinzugefügt"
 fi
 
 # Daemon-Script ausführbar machen (LoxBerry kopiert daemon/daemon nach system/daemons/plugins/)
@@ -73,6 +87,13 @@ if [ -f "${DAEMONSCRIPT}" ]; then
     echo "<OK> Daemon-Script chmod +x: ${DAEMONSCRIPT}"
 else
     echo "<WARNING> Daemon-Script nicht gefunden: ${DAEMONSCRIPT}"
+fi
+
+# Python-Daemon ausführbar machen
+PYDAEMON="${LBHOMEDIR}/bin/plugins/${PLUGIN}/unwetter4lox_daemon.py"
+if [ -f "${PYDAEMON}" ]; then
+    chmod +x "${PYDAEMON}"
+    echo "<OK> Python-Daemon chmod +x: ${PYDAEMON}"
 fi
 
 echo "<OK> postroot.sh abgeschlossen"

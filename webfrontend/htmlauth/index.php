@@ -163,6 +163,77 @@ LBWeb::lbheader($L['MAIN.TITLE'], "https://wiki.loxberry.de", "");
 </ul>
 </div>
 
+<!-- TAWES 360° Korrelation -->
+<?php
+$tawes      = $state['tawes'] ?? [];
+$tawes_cfg  = $cfg['TAWES']   ?? [];
+$tawes_en   = ($tawes_cfg['ENABLED'] ?? '1') == '1';
+if ($tawes_en):
+    $regen_up = (int)($tawes['regen_upstream'] ?? 0);
+    $sturm_up = (int)($tawes['sturm_upstream']  ?? 0);
+    $gewitter = (int)($tawes['gewitter_signal'] ?? 0);
+    $eta      = (int)($tawes['regen_eta_min']   ?? -1);
+    $t_color  = $gewitter ? '#f44336' : ($sturm_up ? '#FF9800' : ($regen_up ? '#2196F3' : '#4CAF50'));
+?>
+<div data-role="collapsible" data-collapsed="<?= empty($tawes) ? 'true' : 'false' ?>" data-theme="a" data-content-theme="a">
+<h3>🌐 <?= $L['MAIN.TAWES_TITLE'] ?></h3>
+<?php if (empty($tawes)): ?>
+<p style="color:#888;padding:10px"><?= $L['MAIN.TAWES_NO_DATA'] ?></p>
+<?php else: ?>
+<ul data-role="listview" data-inset="false">
+    <li><span class="ui-li-count"><?= htmlspecialchars($tawes['dominante_windrichtung_name'] ?? '–') ?> (<?= number_format($tawes['dominante_windrichtung'] ?? 0, 0) ?>°)</span><?= $L['MAIN.TAWES_WINDRICHTUNG'] ?></li>
+    <li><span class="ui-li-count"><?= (int)($tawes['upstream_aktiv'] ?? 0) ?></span><?= $L['MAIN.TAWES_UPSTREAM_COUNT'] ?></li>
+    <li><span class="ui-li-count"><?= number_format($tawes['wind_upstream_kmh'] ?? 0, 1) ?> km/h</span><?= $L['MAIN.TAWES_WIND_UPSTREAM'] ?></li>
+    <?php $trend = (int)($tawes['wind_trend'] ?? 0); ?>
+    <li><span class="ui-li-count" style="color:<?= $trend>0?'#f44336':($trend<0?'#4CAF50':'#888') ?>"><?= $trend>0?'↑ zunehmend':($trend<0?'↓ abnehmend':'→ stabil') ?></span><?= $L['MAIN.TAWES_WIND_TREND'] ?></li>
+    <li><span class="ui-li-count" style="color:<?= $regen_up?'#2196F3':'#4CAF50' ?>"><?= $regen_up ? ($eta>=0 ? "~{$eta} min" : $L['MAIN.TAWES_ETA_UNKNOWN']) : $L['MAIN.TAWES_KEIN_REGEN'] ?></span><?= $L['MAIN.TAWES_REGEN'] ?></li>
+    <?php if ($regen_up && $eta >= 0): ?>
+    <li><span class="ui-li-count"><?= number_format($tawes['front_speed_kmh'] ?? 0, 0) ?> km/h</span><?= $L['MAIN.TAWES_FRONT_SPEED'] ?> <small>(<?= (int)($tawes['regen_konfidenz'] ?? 0) ?>%)</small></li>
+    <?php endif; ?>
+    <li><span class="ui-li-count" style="color:<?= $gewitter?'#f44336':'#888' ?>"><?= $gewitter ? '⚡ Ja' : $L['MAIN.TAWES_NEIN'] ?></span><?= $L['MAIN.TAWES_GEWITTER'] ?></li>
+    <li><span class="ui-li-count" style="color:<?= ($tawes['druck_trend']??0)<-0.3?'#f44336':'#888' ?>"><?= number_format($tawes['druck_trend'] ?? 0, 2) ?> hPa/10min</span><?= $L['MAIN.TAWES_DRUCK_TREND'] ?></li>
+</ul>
+<?php if (!empty($tawes['alle_stationen'])): ?>
+<div data-role="collapsible" data-collapsed="true">
+<h4><?= $L['MAIN.TAWES_STATIONEN'] ?> (<?= count($tawes['alle_stationen']) ?>)</h4>
+<table style="width:100%;font-size:11px;border-collapse:collapse">
+<tr style="background:#eee;font-weight:bold">
+    <td style="padding:4px"><?= $L['MAIN.TAWES_ST_NAME'] ?></td>
+    <td style="padding:4px;text-align:center">km</td>
+    <td style="padding:4px;text-align:center">Dir.</td>
+    <td style="padding:4px;text-align:center">FF</td>
+    <td style="padding:4px;text-align:center">FFX</td>
+    <td style="padding:4px;text-align:center">RR</td>
+    <td style="padding:4px;text-align:center">⬆</td>
+</tr>
+<?php
+$boen_sw = (float)($cfg['THRESHOLDS']['BOEN_ALARM'] ?? 60);
+foreach ($tawes['alle_stationen'] as $st):
+    $up     = (bool)($st['ist_upstream'] ?? false);
+    $rr_v   = $st['RR']     ?? null;
+    $ffx_v  = $st['FFX_kmh'] ?? null;
+    $rr_c   = ($rr_v  !== null && $rr_v  > 0.05)    ? '#2196F3' : '';
+    $ffx_c  = ($ffx_v !== null && $ffx_v >= $boen_sw) ? '#f44336' : '';
+?>
+<tr style="background:<?= $up ? 'rgba(33,150,243,0.07)' : 'transparent' ?>;border-bottom:1px solid #eee">
+    <td style="padding:4px;font-weight:<?= $up?'bold':'normal' ?>"><?= htmlspecialchars($st['name'] ?? '') ?></td>
+    <td style="padding:4px;text-align:center"><?= number_format($st['dist_km'] ?? 0, 0) ?></td>
+    <td style="padding:4px;text-align:center"><?= htmlspecialchars($st['bearing_name'] ?? '–') ?></td>
+    <td style="padding:4px;text-align:center"><?= $st['FF_kmh'] !== null ? number_format($st['FF_kmh'], 0) : '–' ?></td>
+    <td style="padding:4px;text-align:center;color:<?= $ffx_c ?>"><?= $ffx_v !== null ? number_format($ffx_v, 0) : '–' ?></td>
+    <td style="padding:4px;text-align:center;color:<?= $rr_c ?>"><?= $rr_v !== null ? number_format($rr_v, 1) : '–' ?></td>
+    <td style="padding:4px;text-align:center"><?= $up ? '⬆' : '' ?></td>
+</tr>
+<?php endforeach; ?>
+</table>
+<p style="font-size:10px;color:#888;margin:4px 0">⬆ = Upstream (Windrichtung zeigt auf deinen Standort)</p>
+</div>
+<?php endif; ?>
+<p style="font-size:10px;color:#888;margin:4px 0"><?= $L['MAIN.TAWES_LAST_UPDATE'] ?>: <?= htmlspecialchars($tawes['letztes_update'] ?? '–') ?></p>
+<?php endif; ?>
+</div>
+<?php endif; ?>
+
 <!-- Notification Vorschau -->
 <div data-role="collapsible" data-collapsed="false" data-theme="a" data-content-theme="a">
 <h3>🔔 <?= $L['MAIN.LAST_NOTIF'] ?></h3>

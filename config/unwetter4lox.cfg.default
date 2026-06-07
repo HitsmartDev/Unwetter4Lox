@@ -1,21 +1,22 @@
 [LOCATION]
-LAT=47.952835
-LON=13.791286
-NAME=Mein Zuhause
+LAT=
+LON=
+NAME=
 
 [MQTT]
-; 1 = LoxBerry MQTT Gateway automatisch erkennen (empfohlen)
-; 0 = manuell mit BROKER/PORT/USER/PASS verbinden
 USE_LOXBERRY_MQTT=1
 BROKER=127.0.0.1
 PORT=1883
-; USER/PASS: leer lassen fuer automatische Erkennung.
-; Falls rc=5 (nicht autorisiert) im Log erscheint:
-;   Schritt 1: USER und PASS hier eintragen (LoxBerry MQTT Gateway Zugangsdaten)
-;   Schritt 2: Diese Werte gelten auch wenn USE_LOXBERRY_MQTT=1
 USER=
 PASS=
 TOPIC_PREFIX=unwetter
+
+[ZAMG]
+ENABLED=1
+
+[INCA]
+ENABLED=1
+HORIZON_MINUTES=60
 
 [SCHEDULE]
 INTERVAL=300
@@ -23,9 +24,9 @@ INTERVAL=300
 [THRESHOLDS]
 BOEN_ALARM=60
 
-[INCA]
-ENABLED=1
-HORIZON_MINUTES=60
-
 [NOTIFICATIONS]
 MIN_STUFE=1
+
+[TAWES]
+ENABLED=1
+MAX_DISTANCE_KM=120
