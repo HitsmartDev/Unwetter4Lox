@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Unwetter4Lox Daemon v0.4.1 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
+"""Unwetter4Lox Daemon v0.4.2 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math
 from datetime import datetime, timezone, timedelta
 from collections import deque
@@ -617,19 +617,21 @@ def build_alarm(zamg, inca, tawes, akut):
     gewitter = max(gewitter, tawes_g)
     if akut: gewitter = max(gewitter, 2)
 
-    # Wind
+    # Wind – kombiniert ZAMG, INCA, TAWES Upstream-Böen (vs. BOEN_ALARM-Schwelle)
     wind = zamg.get('wind', {}).get('stufe', 0)
     if wind > 0 and zamg.get('wind', {}).get('aktiv', 0): wind = min(3, wind + 1)
     if inca.get('bald_sturm_30'): wind = max(wind, 2)
     elif inca.get('bald_sturm_60'): wind = max(wind, 1)
-    if tawes.get('sturm_upstream'): wind = max(wind, 1)
+    tawes_wind = float(tawes.get('wind_upstream_kmh', 0) or 0)
+    if tawes_wind >= BOEN_ALARM * 2.0: wind = max(wind, 2)   # doppelte Schwelle = akuter Sturm
+    elif tawes_wind >= BOEN_ALARM:     wind = max(wind, 1)   # Schwelle = Warnstufe
 
-    # Regen
+    # Regen – kombiniert ZAMG, INCA Nowcast (vs. REGEN_ALARM-Schwelle), TAWES Regenfront
     regen = 0
     if zamg.get('regen', {}).get('stufe', 0) >= 1: regen = 1
     if zamg.get('regen', {}).get('aktiv', 0):      regen = 2
-    if inca.get('regen_alarm'):                     regen = max(regen, 2)
-    elif inca.get('bald_regen') or inca.get('rr_jetzt', 0) > 0.2: regen = max(regen, 1)
+    if inca.get('regen_alarm'):                     regen = max(regen, 2)   # >= REGEN_ALARM mm/h
+    elif inca.get('bald_regen') or inca.get('rr_jetzt', 0) > 0.1: regen = max(regen, 1)
     if tawes.get('regen_upstream'):
         eta = tawes.get('regen_eta_min', -1)
         regen = max(regen, 2 if 0 <= eta <= 30 else 1)
@@ -638,7 +640,7 @@ def build_alarm(zamg, inca, tawes, akut):
     hagel = 0
     if zamg.get('hagel', {}).get('stufe', 0) >= 1: hagel = 1
     if zamg.get('hagel', {}).get('aktiv', 0):      hagel = 2
-    if inca.get('bald_hagel'): hagel = max(hagel, 1)
+    if inca.get('bald_hagel'):   hagel = max(hagel, 1)
     if inca.get('bald_graupel'): hagel = max(hagel, 1)
 
     # Schnee/Eis
@@ -646,7 +648,10 @@ def build_alarm(zamg, inca, tawes, akut):
     if schnee > 0 and (zamg.get('schnee', {}).get('aktiv') or zamg.get('glatteis', {}).get('aktiv')): schnee = min(3, schnee + 1)
     if inca.get('pt_jetzt') in [2, 3]: schnee = max(schnee, 1)
 
-    # Gesamtstufe (max aus ZAMG)
+    # Gesamtstatus: höchster Wert aller Kategorien
+    gesamt = max(gewitter, wind, regen, hagel, schnee)
+
+    # Gesamtstufe (max aus ZAMG für Referenz)
     all_types = list(WARN_TYPES.values()) + ['hagel']
     max_stufe = max((zamg.get(t, {}).get('stufe', 0) for t in all_types), default=0)
 
@@ -655,11 +660,11 @@ def build_alarm(zamg, inca, tawes, akut):
     if gewitter >= 2: parts.append('⚡ Gewitter AKUT')
     elif gewitter:    parts.append('⚡ Gewitter möglich')
     if wind >= 3:     parts.append('💨 Extremsturm')
-    elif wind == 2:   parts.append('💨 Sturm')
+    elif wind == 2:   parts.append('💨 Sturm aktiv')
     elif wind:        parts.append('💨 Erhöhte Windgefahr')
     if hagel >= 2:    parts.append('🌨 Hagel AKTIV')
     elif hagel:       parts.append('🌨 Hagelgefahr')
-    if regen == 2:    parts.append('🌧 Starkregen')
+    if regen >= 2:    parts.append('🌧 Starkregen')
     elif regen:       parts.append('🌧 Regen erwartet')
     if schnee >= 2:   parts.append('❄️ Schnee/Eis AKTIV')
     elif schnee:      parts.append('❄️ Schnee/Eis möglich')
@@ -667,12 +672,12 @@ def build_alarm(zamg, inca, tawes, akut):
 
     return {
         'gewitter': gewitter, 'wind': wind, 'regen': regen,
-        'hagel': hagel, 'schnee': schnee, 'stufe': int(max_stufe),
-        'zusammenfassung': zusammenfassung
+        'hagel': hagel, 'schnee': schnee, 'gesamt': gesamt,
+        'stufe': int(max_stufe), 'zusammenfassung': zusammenfassung
     }
 
 def publish_alarm(alarm):
-    for k in ['gewitter', 'wind', 'regen', 'hagel', 'schnee', 'stufe']:
+    for k in ['gewitter', 'wind', 'regen', 'hagel', 'schnee', 'gesamt', 'stufe']:
         publish(f'alarm/{k}', alarm.get(k, 0))
     publish('alarm/zusammenfassung', alarm.get('zusammenfassung', ''))
 
@@ -700,7 +705,8 @@ def save_state(data):
 # ---------------------------------------------------------------------------
 # MQTT publish + State save
 # ---------------------------------------------------------------------------
-def publish_all(zamg, akut, inca, prev_ids, new_ids, status_msg, tawes=None):
+def publish_all(zamg, akut, inca, prev_ids, new_ids, status_msg, tawes=None, prev=None):
+    prev = prev or {}
     all_types = list(WARN_TYPES.values()) + ['hagel']
     for t in all_types:
         w = zamg.get(t, {})
@@ -729,11 +735,21 @@ def publish_all(zamg, akut, inca, prev_ids, new_ids, status_msg, tawes=None):
     n_geo   = '\n'.join(z_lines) if z_lines else L['no_warns']
     n_inca  = '\n'.join(i_lines) if i_lines else L['no_warns']
     n_tawes = (tawes or {}).get('notification', '')
-    n_alle  = '\n──\n'.join(filter(None, [n_geo if z_lines else '', n_inca if i_lines else '', n_tawes])) or n_inca
-    publish('notification/geosphere', n_geo)
-    publish('notification/inca', n_inca)
-    publish('notification/tawes', n_tawes)
-    publish('notification/alle', n_alle)
+
+    # Entwarnung: wenn letzte Runde Warnungen aktiv waren und jetzt keine mehr
+    hatte_warn = prev.get('hatte_aktiv', False)
+    if hatte_warn and not irgendwas and not z_lines:
+        n_geo = L['entwarnung']
+        log.info('ZAMG: Entwarnung – alle Wetterwarnungen aufgehoben')
+
+    n_alle = '\n──\n'.join(filter(None, [n_geo if (z_lines or n_geo == L['entwarnung']) else '', n_inca if i_lines else '', n_tawes])) or n_inca
+
+    # Notifications nur publizieren wenn sich Inhalt geändert hat (Deduplizierung)
+    if n_geo   != prev.get('_n_geo',   ''):  publish('notification/geosphere', n_geo)
+    if n_inca  != prev.get('_n_inca',  ''):  publish('notification/inca',      n_inca)
+    if n_tawes != prev.get('_n_tawes', ''):  publish('notification/tawes',     n_tawes)
+    if n_alle  != prev.get('_n_alle',  ''):  publish('notification/alle',      n_alle)
+
     now = datetime.now().astimezone(); ts_iso = now.strftime('%d.%m.%Y %H:%M:%S'); ts_epoch = int(now.timestamp())
     publish('letzter_abruf_datum', ts_iso); publish('letzter_abruf_epoch', ts_epoch)
     publish('status', L['status_ok'] if status_msg == 'OK' else L['status_err'].format(v=status_msg))
@@ -744,6 +760,7 @@ def publish_all(zamg, akut, inca, prev_ids, new_ids, status_msg, tawes=None):
         'letzter_abruf_epoch': ts_epoch, 'status': status_msg, 'zamg': zamg, 'inca': inca,
         'akutwarnung': akut, 'max_stufe': int(max_stufe), 'irgendwas_aktiv': irgendwas,
         'notification_alle': n_alle, 'alarm': alarm, 'tawes': tawes if tawes else {},
+        '_n_geo': n_geo, '_n_inca': n_inca, '_n_tawes': n_tawes, '_n_alle': n_alle,
     })
 
 # ---------------------------------------------------------------------------
@@ -751,7 +768,7 @@ def publish_all(zamg, akut, inca, prev_ids, new_ids, status_msg, tawes=None):
 # ---------------------------------------------------------------------------
 def run():
     global _tawes_last_fetch
-    log.info(f'Unwetter4Lox v0.4.1 gestartet | {LAT},{LON} | Lang={LBLANG}')
+    log.info(f'Unwetter4Lox v0.4.2 gestartet | {LAT},{LON} | Lang={LBLANG}')
     _tawes_last_fetch = 0
     while True:
         try:
@@ -782,7 +799,7 @@ def run():
                     log.info(f'TAWES: {len(tawes.get("alle_stationen",[]))} Stationen | upstream={tawes.get("upstream_aktiv",0)} | regen={tawes.get("regen_upstream",0)}')
                 except Exception as te:
                     log.error(f'TAWES Fehler: {te}')
-            publish_all(zamg, akut, inca, prev_ids, new_ids, status, tawes)
+            publish_all(zamg, akut, inca, prev_ids, new_ids, status, tawes, prev=prev)
         except Exception as e: log.error(f'Hauptloop Fehler: {e}')
         time.sleep(INTERVAL)
 

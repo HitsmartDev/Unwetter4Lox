@@ -1,5 +1,5 @@
 ## 📌 Projekt-Status
-- **Version:** 0.4.1 (Bugfix + Enhancement Release)
+- **Version:** 0.4.2 (Feature Release)
 - **Letzter Stand (Claude, 2026-06-07):**
 
 ### Abgeschlossen in v0.4.0:
