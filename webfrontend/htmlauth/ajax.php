@@ -152,6 +152,18 @@ if ($action === 'get_miniserver_coords') {
     exit;
 }
 
+# Letzten Update-Timestamp zurückgeben (für Auto-Refresh in index.php)
+if ($action === 'check_update') {
+    header('Content-Type: application/json');
+    $sf    = $lbpdatadir . '/state.json';
+    $state = file_exists($sf) ? (json_decode(file_get_contents($sf), true) ?? []) : [];
+    echo json_encode([
+        'epoch'  => (int)($state['letzter_abruf_epoch'] ?? 0),
+        'status' => $state['status'] ?? 'OK',
+    ]);
+    exit;
+}
+
 # Stations-Cache löschen
 if ($action === 'reload_stations') {
     header('Content-Type: application/json');

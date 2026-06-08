@@ -344,6 +344,41 @@ foreach ($tawes['alle_stationen'] as $st):
     📍 <?= htmlspecialchars($cfg['LOCATION']['NAME'] ?? $L['MAIN.NOT_CONFIGURED']) ?>
     &nbsp;·&nbsp; MQTT Broker: <?= $mqtt_display ?>
     &nbsp;·&nbsp; <?= $L['MAIN.INTERVAL'] ?>: <?= (int)($cfg['SCHEDULE']['INTERVAL'] ?? 300) ?>s
+    &nbsp;·&nbsp; <span id="refresh-status" style="color:#aaa">⟳ Auto-Aktualisierung aktiv</span>
 </p>
+
+<script>
+(function() {
+    // Aktuellen Timestamp von der Seite merken
+    var knownEpoch = <?= (int)($state['letzter_abruf_epoch'] ?? 0) ?>;
+    var checkInterval = 30000; // alle 30 Sekunden prüfen
+    var statusEl = document.getElementById('refresh-status');
+    var failCount = 0;
+
+    function checkForUpdate() {
+        fetch('ajax.php?action=check_update', { cache: 'no-store' })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                failCount = 0;
+                if (d.epoch && d.epoch > knownEpoch) {
+                    // Neue Daten verfügbar – Seite neu laden
+                    if (statusEl) statusEl.textContent = '⟳ Neue Daten – wird geladen…';
+                    location.reload();
+                } else {
+                    // Noch keine neuen Daten
+                    var now = new Date().toLocaleTimeString('de-AT', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+                    if (statusEl) statusEl.textContent = '⟳ Zuletzt geprüft: ' + now;
+                }
+            })
+            .catch(function() {
+                failCount++;
+                if (statusEl) statusEl.textContent = '⚠ Verbindung unterbrochen (' + failCount + ')';
+            });
+    }
+
+    // Erste Prüfung nach 30s, dann alle 30s wiederholen
+    setInterval(checkForUpdate, checkInterval);
+})();
+</script>
 
 <?php LBWeb::lbfooter(); ?>
