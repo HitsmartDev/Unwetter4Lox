@@ -435,8 +435,11 @@ def correlate_tawes():
     mit_ffx = sum(1 for v in raw_data.values() if v.get('FFX') is not None)
     mit_rr  = sum(1 for v in raw_data.values() if v.get('RR')  is not None)
     log.info(f'TAWES API: {len(raw_data)}/{len(nearby)} Stationen erreicht | '
-             f'Wind-Sensoren: {mit_ff} | Böen-Sensoren: {mit_ffx} | Regen-Sensoren: {mit_rr} '
-             f'(Stationen ohne Sensor zeigen "–" in der UI – das ist korrekt)')
+             f'Wind-Sensoren: {mit_ff} | Böen-Sensoren: {mit_ffx} | Regen-Sensoren: {mit_rr}')
+    if mit_ffx == 0:
+        log.info('TAWES: Keine Böen-Sensoren in diesem Gebiet aktiv – alle Stationen zeigen "–" für Wind/Böen (TAWES-Netzrealität)')
+    elif mit_ffx < len(raw_data) // 3:
+        log.info(f'TAWES: Nur {mit_ffx} von {len(raw_data)} Stationen haben Böen-Sensoren – typisch für das TAWES-Klimastations-Netz')
     for sid, v in raw_data.items():
         sname = next((s['name'] for s in nearby if s['id'] == sid), sid)
         log.debug(f'  Station {sname}: FF={v.get("FF")} m/s, FFX={v.get("FFX")} m/s, '
@@ -489,8 +492,11 @@ def correlate_tawes():
     # Upstream Wind & Sturm
     wind_upstream_kmh = 0.0; sturm_upstream = 0
     if upstream_list:
+        def _fmt_upstream(s):
+            ffx = s.get('FFX_kmh')
+            return f'{s["name"]} ({s["dist_km"]}km, FFX={f"{ffx:.0f}" if ffx is not None else "–"}km/h)'
         log.info(f'TAWES Upstream ({len(upstream_list)} Stationen aus {dominante_wr_name} {dominante_wr:.0f}°): '
-                 + ', '.join(f'{s["name"]} ({s["dist_km"]}km, FFX={s.get("FFX_kmh","–")}km/h)' for s in upstream_list[:6]))
+                 + ', '.join(_fmt_upstream(s) for s in upstream_list[:6]))
         ffx_vals = [s['FFX_kmh'] for s in upstream_list if s.get('FFX_kmh') is not None]
         if ffx_vals:
             wind_upstream_kmh = round(max(ffx_vals), 1)
