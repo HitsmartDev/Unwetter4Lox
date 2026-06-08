@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Unwetter4Lox Daemon v0.4.5 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
-import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math
+import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math, re
 from datetime import datetime, timezone, timedelta
 from collections import deque
 
@@ -348,9 +348,16 @@ def _linreg_slope(series):
 
 def _canon_sid(x):
     """Kanonische Station-ID: numerische Strings ohne führende Nullen (bidirektionales Matching).
-    '011001' → '11001', 11001 → '11001', 'ASPACH' → 'ASPACH'"""
-    try: return str(int(str(x).strip()))
-    except (ValueError, TypeError): return str(x).strip()
+    Behandelt auch compound IDs wie 'tawes.11035' → '11035', '011001' → '11001'.
+    Alphanumerische IDs wie 'ASPACH' bleiben unverändert."""
+    s = str(x).strip()
+    # Direkt numerisch (häufigster Fall)
+    try: return str(int(s))
+    except (ValueError, TypeError): pass
+    # Letzten numerischen Block extrahieren: 'tawes.11035' → '11035', 'st_011001' → '11001'
+    nums = re.findall(r'\d+', s)
+    if nums: return str(int(nums[-1]))
+    return s
 
 def load_tawes_stations():
     """Stationsliste laden. Täglich von API, sonst aus TAWES_CACHE_FILE."""
@@ -421,11 +428,21 @@ def fetch_tawes_data(station_ids):
     if ts_list:
         try: ts = int(datetime.fromisoformat(ts_list[0].replace('Z', '+00:00')).timestamp())
         except: pass
-    # Kanonisches Lookup: API gibt IDs in beliebigem Format zurück (int, str, führende Nullen)
-    # _canon_sid normalisiert beide Seiten auf gleiche Form → bidirektionales Matching
+    # Kanonisches Lookup: API gibt IDs in beliebigem Format zurück (int, str, führende Nullen, compound)
+    # _canon_sid extrahiert numerischen Kern aus beliebigem Format → bidirektionales Matching
     canon_to_orig = {_canon_sid(str(i)): str(i) for i in ids}
+
+    # Debug-Log: erste 3 API-Features zeigen um ID-Format zu verstehen (hilft bei Diagnose)
+    features = data.get('features', [])
+    if features:
+        sample = []
+        for f in features[:3]:
+            p = f.get('properties', {})
+            sample.append(f"station={p.get('station')!r} props.id={p.get('id')!r} feature.id={f.get('id')!r}")
+        log.debug(f'TAWES API ID-Format (erste 3): {" | ".join(sample)}')
+
     result = {}
-    for feature in data.get('features', []):
+    for feature in features:
         props = feature.get('properties', {})
         raw_sid = props.get('station') or props.get('id') or feature.get('id') or ''
         if not raw_sid: continue

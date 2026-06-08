@@ -349,9 +349,8 @@ foreach ($tawes['alle_stationen'] as $st):
 
 <script>
 (function() {
-    // Aktuellen Timestamp von der Seite merken
-    var knownEpoch = <?= (int)($state['letzter_abruf_epoch'] ?? 0) ?>;
-    var checkInterval = 30000; // alle 30 Sekunden prüfen
+    var knownEpoch   = <?= (int)($state['letzter_abruf_epoch'] ?? 0) ?>;
+    var knownRunning = <?= $daemon_running ? 'true' : 'false' ?>;
     var statusEl = document.getElementById('refresh-status');
     var failCount = 0;
 
@@ -360,12 +359,12 @@ foreach ($tawes['alle_stationen'] as $st):
             .then(function(r) { return r.json(); })
             .then(function(d) {
                 failCount = 0;
-                if (d.epoch && d.epoch > knownEpoch) {
-                    // Neue Daten verfügbar – Seite neu laden
-                    if (statusEl) statusEl.textContent = '⟳ Neue Daten – wird geladen…';
+                var newData    = d.epoch   && d.epoch   > knownEpoch;
+                var statusFlip = typeof d.running !== 'undefined' && d.running !== knownRunning;
+                if (newData || statusFlip) {
+                    if (statusEl) statusEl.textContent = '⟳ ' + (statusFlip ? 'Daemon-Status geändert' : 'Neue Daten') + ' – wird geladen…';
                     location.reload();
                 } else {
-                    // Noch keine neuen Daten
                     var now = new Date().toLocaleTimeString('de-AT', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
                     if (statusEl) statusEl.textContent = '⟳ Zuletzt geprüft: ' + now;
                 }
@@ -376,8 +375,9 @@ foreach ($tawes['alle_stationen'] as $st):
             });
     }
 
-    // Erste Prüfung nach 30s, dann alle 30s wiederholen
-    setInterval(checkForUpdate, checkInterval);
+    // Erste Prüfung nach 10s (schnelles Feedback nach Daemon-Start), dann alle 30s
+    setTimeout(checkForUpdate, 10000);
+    setInterval(checkForUpdate, 30000);
 })();
 </script>
 

@@ -152,14 +152,28 @@ if ($action === 'get_miniserver_coords') {
     exit;
 }
 
-# Letzten Update-Timestamp zurückgeben (für Auto-Refresh in index.php)
+# Letzten Update-Timestamp + Daemon-Status zurückgeben (für Auto-Refresh in index.php)
 if ($action === 'check_update') {
     header('Content-Type: application/json');
     $sf    = $lbpdatadir . '/state.json';
     $state = file_exists($sf) ? (json_decode(file_get_contents($sf), true) ?? []) : [];
+
+    # Daemon-PID prüfen (gleiche Logik wie index.php)
+    $pidfile = $lbplogdir . '/daemon.pid';
+    $pid     = file_exists($pidfile) ? trim(file_get_contents($pidfile)) : '';
+    $running = false;
+    if ($pid && is_numeric($pid)) {
+        $cmdline = @file_get_contents("/proc/{$pid}/cmdline");
+        $running = ($cmdline !== false && (
+            strpos($cmdline, 'unwetter4lox_daemon') !== false ||
+            strpos($cmdline, 'unwetter4lox') !== false
+        ));
+    }
+
     echo json_encode([
-        'epoch'  => (int)($state['letzter_abruf_epoch'] ?? 0),
-        'status' => $state['status'] ?? 'OK',
+        'epoch'   => (int)($state['letzter_abruf_epoch'] ?? 0),
+        'status'  => $state['status'] ?? 'OK',
+        'running' => $running,
     ]);
     exit;
 }

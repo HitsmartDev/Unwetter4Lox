@@ -46,6 +46,17 @@ if [ -f "${DAEMON_PY}" ]; then
     echo "<OK> Daemon ausführbar: ${DAEMON_PY}"
 fi
 
+# TAWES Stations-Cache bei jeder Installation/Update löschen
+# Verhindert ID-Mismatch wenn GeoSphere API das ID-Format ändert.
+# Der Daemon lädt den Cache automatisch beim ersten Lauf neu.
+TAWES_CACHE="${LBHOMEDIR}/data/plugins/${PLUGINDIR}/tawes_stations.json"
+if [ -f "$TAWES_CACHE" ]; then
+    rm -f "$TAWES_CACHE"
+    echo "<OK> TAWES Stations-Cache gelöscht – wird beim ersten Daemon-Start neu geladen"
+else
+    echo "<INFO> Kein TAWES Cache vorhanden (Erstinstallation)"
+fi
+
 # Daemon nach Update/Neuinstallation automatisch starten wenn bereits konfiguriert (LAT/LON vorhanden)
 DAEMON="${LBHOMEDIR}/system/daemons/plugins/${PLUGINDIR}"
 LAT=$(grep "^LAT=" "${CFGFILE}" 2>/dev/null | cut -d= -f2 | tr -d ' \r')
