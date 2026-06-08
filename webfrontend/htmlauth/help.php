@@ -88,14 +88,21 @@ code { background:#f0f0f0; padding:1px 4px; border-radius:3px; font-size:10px; f
 <table class="mqtt-table">
 <thead><tr><th>Topic</th><th>Werte</th><th>Bedeutung</th></tr></thead>
 <tbody>
-<tr><td><code>alarm/gesamt</code></td><td>0–3</td><td><b>Höchster Alarmwert aller Kategorien.</b> 0=alles ruhig, 1=Vorsicht, 2=Warnung aktiv, 3=AKUT/Extrem. <b>Primärer Gate-Wert für Push-Entscheidung.</b></td></tr>
-<tr><td><code>alarm/gewitter</code></td><td>0–3</td><td>0=keiner, 1=möglich (ZAMG oder TAWES-Signal), 2=akut (ZAMG aktiv, Druckabfall+Feuchte+Böen), 3=Extremgefahr</td></tr>
-<tr><td><code>alarm/wind</code></td><td>0–3</td><td>0=ruhig, 1=erhöhte Böen (INCA oder TAWES), 2=Sturm (ZAMG Stufe 2+ oder INCA &gt;60 km/h), 3=Extremsturm</td></tr>
-<tr><td><code>alarm/regen</code></td><td>0–2</td><td>0=trocken, 1=Regen erwartet/upstream, 2=stark oder ETA &lt;30 min</td></tr>
-<tr><td><code>alarm/hagel</code></td><td>0–2</td><td>0=kein, 1=möglich (ZAMG oder INCA), 2=Warnung aktiv</td></tr>
-<tr><td><code>alarm/schnee</code></td><td>0–2</td><td>0=kein, 1=möglich, 2=Warnung aktiv. Inkl. Glatteis.</td></tr>
-<tr><td><code>alarm/stufe</code></td><td>0–4</td><td>Höchste offizielle ZAMG-Warnstufe über alle Kategorien</td></tr>
-<tr><td><code>alarm/zusammenfassung</code></td><td>Text</td><td>Lesbarer Kurztext, z.B. "⚡ Gewitter möglich | 🌧 Regen erwartet"</td></tr>
+<tr><td><code>alarm/gesamt</code></td><td>0–3</td><td><b>max(gewitter, wind, regen, hagel, schnee)</b> – der höchste Wert aller 5 Kategorien in einer Zahl. 0=ruhig, 1=Vorsicht, 2=Warnung, 3=AKUT. <b>Primärer Gate-Wert für Push-Entscheidungen.</b></td></tr>
+<tr><td><code>alarm/gewitter</code></td><td>0–3</td><td>0=keiner, 1=möglich (ZAMG Stufe 1 od. TAWES-Signal), 2=akut (ZAMG aktiv), 3=Extremgefahr</td></tr>
+<tr><td><code>alarm/wind</code></td><td>0–3</td><td>0=ruhig, 1=erhöhte Böen (INCA/TAWES ≥ BOEN_ALARM), 2=Sturm (ZAMG Stufe 2+ od. INCA 30min od. TAWES 2×BOEN), 3=Extremsturm</td></tr>
+<tr><td><code>alarm/regen</code></td><td>0–2</td><td>0=trocken, 1=Regen erwartet/upstream, 2=Regenrate ≥ REGEN_ALARM od. ETA &lt;30 min</td></tr>
+<tr><td><code>alarm/hagel</code></td><td>0–2</td><td>0=kein, 1=möglich (ZAMG Stufe 1 od. INCA bald_hagel), 2=Warnung aktiv</td></tr>
+<tr><td><code>alarm/schnee</code></td><td>0–2</td><td>0=kein, 1=möglich (ZAMG Stufe 1 od. INCA PT=Schnee), 2=Warnung aktiv. Inkl. Glatteis.</td></tr>
+<tr><td><code>alarm/stufe</code></td><td>0–4</td><td>Höchste <b>offizielle ZAMG</b>-Warnstufe (nur ZAMG, kein INCA/TAWES)</td></tr>
+<tr><td><code>alarm/zusammenfassung</code></td><td>Text</td><td>Fertiger Anzeigetext aus allen aktiven Kategorien. Ideal für Loxone-Statusfeld. Mögliche Werte: <br>
+<code>✅ Keine Warnungen</code> (alles 0)<br>
+<code>⚡ Gewitter möglich</code> / <code>⚡ Gewitter AKUT</code><br>
+<code>💨 Erhöhte Windgefahr</code> / <code>💨 Sturm aktiv</code> / <code>💨 Extremsturm</code><br>
+<code>🌧 Regen erwartet</code> / <code>🌧 Starkregen</code><br>
+<code>🌨 Hagelgefahr</code> / <code>🌨 Hagel AKTIV</code><br>
+<code>❄️ Schnee/Eis möglich</code> / <code>❄️ Schnee/Eis AKTIV</code><br>
+Mehrere Kategorien: <code>⚡ Gewitter AKUT | 💨 Sturm aktiv</code></td></tr>
 </tbody>
 </table>
 </div>
@@ -171,13 +178,23 @@ code { background:#f0f0f0; padding:1px 4px; border-radius:3px; font-size:10px; f
 
 <div data-role="collapsible" data-collapsed="true">
 <h4>🔔 notification/ – Fertige Push-Texte</h4>
+<p>Werden <b>nur bei Änderung</b> publiziert (kein Spam). Immer zusammen mit einem Gate-Topic prüfen, z.B. <code>alarm/gesamt &gt; 0</code> oder <code>zamg/irgendwas_aktiv = 1</code>.</p>
 <table class="mqtt-table">
-<thead><tr><th>Topic</th><th>Bedeutung</th></tr></thead>
+<thead><tr><th>Topic</th><th>Bedeutung</th><th>Beispielwerte</th></tr></thead>
 <tbody>
-<tr><td><code>notification/geosphere</code></td><td>Alle aktiven ZAMG-Warnungen als Klartext (ab Mindeststufe)</td></tr>
-<tr><td><code>notification/inca</code></td><td>INCA-Zusammenfassung als Klartext</td></tr>
-<tr><td><code>notification/tawes</code></td><td>TAWES-Zusammenfassung (z.B. "🌧 Regenfront ~18min | 62km/h aus W")</td></tr>
-<tr><td><code>notification/alle</code></td><td>Kombination aller aktiven Warnungen – ideal für Loxone Push-Nachrichten</td></tr>
+<tr><td><code>notification/geosphere</code></td><td>ZAMG-Warnungen ab konfigurierter Mindeststufe</td><td>
+<code>⚠️ ORANGE – Wind | heute 14:00 – morgen 06:00</code><br>
+<code>keine aktiven Warnungen</code> (kein Alarm)<br>
+<code>✅ Entwarnung – alle Wetterwarnungen aufgehoben.</code> (nach Ende)</td></tr>
+<tr><td><code>notification/inca</code></td><td>INCA Nowcast-Lage</td><td>
+<code>✅ kein Alarm | Böen: 12.6 km/h</code> (normal)<br>
+<code>⚠️ Sturm in 20 min | Böen bis 75 km/h</code></td></tr>
+<tr><td><code>notification/tawes</code></td><td>TAWES-Meldung bei Regenfront oder Sturm upstream (leer wenn ruhig)</td><td>
+<code>🌧 Regenfront ~18min | 62km/h aus W</code><br>
+<code>⚡ Gewitter-Signal | Druckabfall + hohe Feuchte</code></td></tr>
+<tr><td><code>notification/alle</code></td><td>Alle aktiven Meldungen kombiniert (durch ── getrennt) – Empfehlung für den Loxone Push</td><td>
+<code>✅ kein Alarm | Böen: 12.6 km/h</code> (ruhig)<br>
+<code>⚠️ ORANGE – Wind | ... ── ⚠️ Sturm in 20 min</code></td></tr>
 </tbody>
 </table>
 </div>

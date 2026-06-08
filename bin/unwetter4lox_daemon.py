@@ -346,29 +346,41 @@ def _linreg_slope(series):
     if denom == 0: return 0.0
     return sum((i - xm) * (v - ym) for i, v in enumerate(y)) / denom
 
+def _canon_sid(x):
+    """Kanonische Station-ID: numerische Strings ohne führende Nullen (bidirektionales Matching).
+    '011001' → '11001', 11001 → '11001', 'ASPACH' → 'ASPACH'"""
+    try: return str(int(str(x).strip()))
+    except (ValueError, TypeError): return str(x).strip()
+
 def load_tawes_stations():
     """Stationsliste laden. Täglich von API, sonst aus TAWES_CACHE_FILE."""
     global _tawes_all_stations
-    # Aus In-Memory Cache wenn frisch genug
     cache_age = time.time() - os.path.getmtime(TAWES_CACHE_FILE) if os.path.exists(TAWES_CACHE_FILE) else 999999
     if _tawes_all_stations and cache_age < 86400:
         return _tawes_all_stations
-    # Aus Datei-Cache laden wenn < 24h
+    # Aus Datei-Cache laden – IDs beim Laden kanonisieren (repariert alte Cache-Files mit falschen Formaten)
     if os.path.exists(TAWES_CACHE_FILE) and cache_age < 86400:
         try:
             with open(TAWES_CACHE_FILE, 'r', encoding='utf-8') as f:
-                _tawes_all_stations = json.load(f)
-            return _tawes_all_stations
+                loaded = json.load(f)
+            cleaned = []
+            for s in loaded:
+                sid = _canon_sid(s.get('id', ''))
+                if sid and sid != 'None':
+                    cleaned.append({**s, 'id': sid})
+            if cleaned:
+                _tawes_all_stations = cleaned
+                return _tawes_all_stations
         except: pass
-    # Von API laden
+    # Von API laden – IDs sofort kanonisieren beim Speichern
     data = fetch_json('https://dataset.api.hub.geosphere.at/v1/station/current/tawes-v1-10min/metadata', 'TAWES-Metadata')
     if not data:
         return _tawes_all_stations  # Fallback auf alten Cache
     stations = []
     for s in data.get('stations', data.get('features', [])):
         p = s.get('properties', s)
-        # ID aus properties ODER feature-Level-ID (GeoJSON) – 'or' verhindert str(None)="None"-Bug
-        sid = str(p.get('id') or p.get('station_id') or s.get('id') or '')
+        raw_id = p.get('id') or p.get('station_id') or s.get('id') or ''
+        sid = _canon_sid(raw_id)
         if not sid or sid == 'None': continue
         name = p.get('name', p.get('station_name', sid))
         lat = float(p.get('lat', p.get('latitude', 0) or 0))
@@ -409,21 +421,18 @@ def fetch_tawes_data(station_ids):
     if ts_list:
         try: ts = int(datetime.fromisoformat(ts_list[0].replace('Z', '+00:00')).timestamp())
         except: pass
-    # Schnelles Lookup: angeforderte IDs normalisiert (str) für späteres Matching
-    requested_norm = {str(i): str(i) for i in ids}
-    # Auch int-Varianten registrieren: "11001" ↔ "011001" ↔ 11001
-    for i in ids:
-        s = str(i)
-        try: requested_norm[str(int(s))] = s  # führende Nullen entfernen → auf Original mappen
-        except ValueError: pass
+    # Kanonisches Lookup: API gibt IDs in beliebigem Format zurück (int, str, führende Nullen)
+    # _canon_sid normalisiert beide Seiten auf gleiche Form → bidirektionales Matching
+    canon_to_orig = {_canon_sid(str(i)): str(i) for i in ids}
     result = {}
     for feature in data.get('features', []):
         props = feature.get('properties', {})
-        # 'or' verhindert str(None)="None"-Bug: wenn Schlüssel da aber Wert None ist
-        api_sid = str(props.get('station') or props.get('id') or feature.get('id') or '')
-        if not api_sid or api_sid == 'None': continue
-        # API-ID auf angeforderte ID mappen (normalisiert)
-        matched_id = requested_norm.get(api_sid, api_sid)
+        raw_sid = props.get('station') or props.get('id') or feature.get('id') or ''
+        if not raw_sid: continue
+        api_canon = _canon_sid(str(raw_sid))
+        if not api_canon or api_canon == 'None': continue
+        # Auf originale Cache-ID mappen (beide Seiten kanonisch → immer Match bei gleicher Basis-ID)
+        matched_id = canon_to_orig.get(api_canon, str(raw_sid))
         params = props.get('parameters', {})
         def _v(key):
             raw = params.get(key, {}).get('data', [None])

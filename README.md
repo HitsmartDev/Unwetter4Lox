@@ -139,20 +139,46 @@ Alle Topics werden mit `retain=true` publiziert (Loxone bekommt den letzten Wert
 
 ### Gesamtstatus (alarm/)
 
-**Empfohlen für Loxone-Automatisierungen.** Kombiniert alle drei Datenquellen.
+**Empfohlen für Loxone-Automatisierungen.** Kombiniert alle drei Datenquellen zu einem einzigen Wert pro Kategorie.
 
-| Topic | Beschreibung | Werte |
-|:------|:-------------|:------|
-| `alarm/gesamt` | Höchster Alarmwert aller Kategorien | `0`–`3` |
-| `alarm/gewitter` | Gewittergefahr | `0`–`3` |
-| `alarm/wind` | Windgefahr / Sturm | `0`–`3` |
-| `alarm/regen` | Regenrisiko | `0`–`2` |
-| `alarm/hagel` | Hagelgefahr | `0`–`2` |
-| `alarm/schnee` | Schnee / Eisrisiko | `0`–`2` |
-| `alarm/stufe` | Höchste ZAMG-Warnstufe | `0`–`4` |
-| `alarm/zusammenfassung` | Lesbare Zusammenfassung | `⚡ Gewitter AKUT \| 💨 Sturm aktiv` |
+| Topic | Beschreibung | Mögliche Werte |
+|:------|:-------------|:---------------|
+| `alarm/gesamt` | `max(gewitter, wind, regen, hagel, schnee)` – der höchste Wert aller 5 Kategorien in einer Zahl. Primärer Gate-Wert für Push-Entscheidungen. | `0`–`3` |
+| `alarm/gewitter` | Gewittergefahr aus ZAMG + TAWES-Gewittersignal kombiniert | `0`–`3` |
+| `alarm/wind` | Windgefahr aus ZAMG-Warnung + INCA-Böenvorhersage + TAWES-Upstream | `0`–`3` |
+| `alarm/regen` | Regenrisiko aus ZAMG + INCA-Nowcast + TAWES-Regenfront-ETA | `0`–`2` |
+| `alarm/hagel` | Hagelgefahr aus ZAMG-Warnung + INCA-Hagelvorhersage | `0`–`2` |
+| `alarm/schnee` | Schnee/Glatteis aus ZAMG + INCA-Niederschlagstyp | `0`–`2` |
+| `alarm/stufe` | Höchste **offizielle** ZAMG-Warnstufe (nur ZAMG, kein INCA/TAWES) | `0`–`4` |
+| `alarm/zusammenfassung` | Fertiger Anzeigetext für alle aktiven Kategorien, mit Emoji-Symbolen. Ideal für Loxone-Statusanzeige. Bei keiner Warnung: `✅ Keine Warnungen` | Text |
 
-**Alarmstufen:** `0`=Keine, `1`=Möglich/Vorsicht, `2`=Aktiv/Warnung, `3`=AKUT/Extrem
+**Stufen-Bedeutung für `alarm/gesamt`, `alarm/gewitter`, `alarm/wind`, `alarm/regen`, `alarm/hagel`, `alarm/schnee`:**
+
+| Wert | Bedeutung | Empfehlung |
+|:----:|:----------|:-----------|
+| `0` | Keine Warnung | Kein Push senden |
+| `1` | Möglich / Vorsicht | Optionaler Info-Push |
+| `2` | Aktiv / Warnung | Push empfohlen |
+| `3` | AKUT / Extrem | Sofort-Push |
+
+**Mögliche Texte für `alarm/zusammenfassung`:**
+
+| Wert | Bedeutung |
+|:-----|:----------|
+| `✅ Keine Warnungen` | Alle Kategorien = 0 |
+| `⚡ Gewitter möglich` | gewitter = 1 |
+| `⚡ Gewitter AKUT` | gewitter ≥ 2 |
+| `💨 Erhöhte Windgefahr` | wind = 1 |
+| `💨 Sturm aktiv` | wind = 2 |
+| `💨 Extremsturm` | wind = 3 |
+| `🌧 Regen erwartet` | regen = 1 |
+| `🌧 Starkregen` | regen = 2 |
+| `🌨 Hagelgefahr` | hagel = 1 |
+| `🌨 Hagel AKTIV` | hagel ≥ 2 |
+| `❄️ Schnee/Eis möglich` | schnee = 1 |
+| `❄️ Schnee/Eis AKTIV` | schnee ≥ 2 |
+
+Mehrere aktive Kategorien werden mit ` \| ` verbunden, z.B.: `⚡ Gewitter AKUT \| 💨 Sturm aktiv \| 🌧 Starkregen`
 
 ### GeoSphere Austria Warnungen (zamg/)
 
@@ -213,14 +239,18 @@ Alle Topics werden mit `retain=true` publiziert (Loxone bekommt den letzten Wert
 
 ### Notifications (notification/)
 
-Textmeldungen für Loxone Push-Benachrichtigungen. Werden **nur publiziert wenn sich der Inhalt ändert** (keine Spam-Wiederholungen).
+Textmeldungen für Loxone Push-Benachrichtigungen. Werden **nur publiziert wenn sich der Inhalt ändert** (keine Spam-Wiederholungen bei gleichbleibendem Status).
 
-| Topic | Beschreibung |
-|:------|:-------------|
-| `notification/geosphere` | ZAMG-Warnungen als Klartext. Bei Entwarnung: `✅ Entwarnung – alle Wetterwarnungen aufgehoben.` |
-| `notification/inca` | INCA-Lage als Klartext |
-| `notification/tawes` | TAWES-Meldung als Klartext |
-| `notification/alle` | Alle drei kombiniert (durch `──` getrennt) |
+| Topic | Beschreibung | Beispieltext |
+|:------|:-------------|:-------------|
+| `notification/geosphere` | ZAMG-Warnungen als Klartext ab konfigurierter Mindeststufe. Nur pushen wenn `zamg/irgendwas_aktiv = 1`! | `⚠️ ORANGE – Wind \| heute 14:00 – morgen 06:00 \| Sturmböen` |
+| `notification/inca` | INCA Nowcast-Zusammenfassung | `✅ kein Alarm \| Böen: 12.6 km/h` oder `⚠️ Sturm in 20 min \| Böen bis 75 km/h` |
+| `notification/tawes` | TAWES-Meldung bei aktiver Regenfront oder Sturm upstream | `🌧 Regenfront ~18min \| 62km/h aus W` |
+| `notification/alle` | Alle drei Quellen kombiniert, durch `──` getrennt | Kombination der obigen |
+
+**Entwarnung** (automatisch nach ZAMG-Warnung): `notification/geosphere` enthält dann `✅ Entwarnung – alle Wetterwarnungen aufgehoben.`
+
+**Kein Alarm** (Normalzustand): `notification/inca` und `notification/alle` enthalten `✅ kein Alarm | Böen: X km/h`
 
 ---
 
