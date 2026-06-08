@@ -1,4 +1,4 @@
-# Unwetter4Lox v0.4.2
+# Unwetter4Lox v0.4.8
 
 **LoxBerry-Plugin für automatische Unwettererkennung und Wetterautomatisierung.**
 
@@ -161,9 +161,12 @@ Alle Topics werden mit `retain=true` publiziert (Loxone bekommt den letzten Wert
 | `zamg/max_stufe` | Höchste aktive Warnstufe | `0`–`4` |
 | `zamg/irgendwas_aktiv` | Mind. eine aktive/baldige Warnung | `0` / `1` |
 | `zamg/akutwarnung` | Behördliche Akutwarnung | `0` / `1` |
+| `zamg/letzter_abruf` | Zeitstempel letzter ZAMG-Abruf | `08.06.2026 07:30:00` |
 | `zamg/{typ}/stufe` | Warnstufe je Wettertyp | `0`–`4` |
 | `zamg/{typ}/aktiv` | Warnung gerade aktiv | `0` / `1` |
 | `zamg/{typ}/bald` | Warnung beginnt in < 30 min | `0` / `1` |
+| `zamg/{typ}/start_epoch` | Warnungsbeginn als Unix-Timestamp | `0` wenn keine Warnung |
+| `zamg/{typ}/end_epoch` | Warnungsende als Unix-Timestamp | `0` wenn keine Warnung |
 | `zamg/{typ}/notification` | Klartext für Push | `ORANGE – Wind \| heute 14:00–20:00` |
 
 **Typen `{typ}`:** `wind`, `regen`, `schnee`, `glatteis`, `gewitter`, `hagel`, `hitze`, `kaelte`
@@ -172,6 +175,7 @@ Alle Topics werden mit `retain=true` publiziert (Loxone bekommt den letzten Wert
 
 | Topic | Beschreibung | Einheit |
 |:------|:-------------|:--------|
+| `inca/letzter_abruf` | Zeitstempel letzter INCA-Abruf | `08.06.2026 07:30:00` |
 | `inca/fx` | Aktuelle Böenstärke | km/h |
 | `inca/ff` | Aktuelle Windgeschwindigkeit | km/h |
 | `inca/fx_max_30min` | Max. Böen in den nächsten 30 min | km/h |
@@ -290,6 +294,14 @@ Aktion:   Bewässerungsprogramm abbrechen
 Auslöser: alarm/gesamt >= 2  (Wert geändert)
 Nachricht: notification/alle
 ```
+
+**Morgen-Zusammenfassung ZAMG (nur wenn Warnung anliegt):**
+```
+Zeitprogramm: täglich 07:00 Uhr
+Bedingung:    zamg/irgendwas_aktiv = 1   ← Gate: 0 = kein Push, 1 = Push senden
+Nachricht: notification/geosphere
+```
+> Ohne diesen Gate würde jeden Morgen "keine aktiven Warnungen" gepusht, auch wenn alles ruhig ist.
 
 **Entwarnung nach Unwetter:**
 ```

@@ -84,10 +84,12 @@ code { background:#f0f0f0; padding:1px 4px; border-radius:3px; font-size:10px; f
 <div data-role="collapsible" data-collapsed="false">
 <h4>🚦 alarm/ – Aggregierter Gesamtstatus (Kombination aller Quellen)</h4>
 <p>Diese Topics sind für Loxone-Logiken optimiert: ein Wert fasst alle Quellen zusammen.</p>
+<p><b>Wann soll ich pushen?</b> Verwende <code>alarm/gesamt</code> als Gate: Wert wechselt von <code>0</code> → <code>≥ 1</code> = Push senden. Bei <code>0</code> = keine Meldung ausgeben.</p>
 <table class="mqtt-table">
 <thead><tr><th>Topic</th><th>Werte</th><th>Bedeutung</th></tr></thead>
 <tbody>
-<tr><td><code>alarm/gewitter</code></td><td>0 / 1 / 2</td><td>0=keiner, 1=möglich (ZAMG oder TAWES-Signal), 2=akut (ZAMG aktiv, Druckabfall+Feuchte+Böen)</td></tr>
+<tr><td><code>alarm/gesamt</code></td><td>0–3</td><td><b>Höchster Alarmwert aller Kategorien.</b> 0=alles ruhig, 1=Vorsicht, 2=Warnung aktiv, 3=AKUT/Extrem. <b>Primärer Gate-Wert für Push-Entscheidung.</b></td></tr>
+<tr><td><code>alarm/gewitter</code></td><td>0–3</td><td>0=keiner, 1=möglich (ZAMG oder TAWES-Signal), 2=akut (ZAMG aktiv, Druckabfall+Feuchte+Böen), 3=Extremgefahr</td></tr>
 <tr><td><code>alarm/wind</code></td><td>0–3</td><td>0=ruhig, 1=erhöhte Böen (INCA oder TAWES), 2=Sturm (ZAMG Stufe 2+ oder INCA &gt;60 km/h), 3=Extremsturm</td></tr>
 <tr><td><code>alarm/regen</code></td><td>0–2</td><td>0=trocken, 1=Regen erwartet/upstream, 2=stark oder ETA &lt;30 min</td></tr>
 <tr><td><code>alarm/hagel</code></td><td>0–2</td><td>0=kein, 1=möglich (ZAMG oder INCA), 2=Warnung aktiv</td></tr>
@@ -101,19 +103,19 @@ code { background:#f0f0f0; padding:1px 4px; border-radius:3px; font-size:10px; f
 <div data-role="collapsible" data-collapsed="true">
 <h4>🌩️ zamg/ – Offizielle GeoSphere Warnungen</h4>
 <p>Typen: <code>wind</code> · <code>regen</code> · <code>schnee</code> · <code>glatteis</code> · <code>gewitter</code> · <code>hagel</code> · <code>hitze</code> · <code>kaelte</code></p>
+<p><b>Morgen-Push Empfehlung:</b> Zeitprogramm 07:00 → prüfe <code>zamg/irgendwas_aktiv</code>. Wenn <code>= 1</code> → Push mit Text aus <code>notification/geosphere</code>. Bei <code>= 0</code> keine Meldung senden.</p>
 <table class="mqtt-table">
 <thead><tr><th>Topic</th><th>Werte</th><th>Bedeutung</th></tr></thead>
 <tbody>
 <tr><td><code>zamg/max_stufe</code></td><td>0–4</td><td>Höchste aktive Warnstufe über alle Typen</td></tr>
-<tr><td><code>zamg/irgendwas_aktiv</code></td><td>0 / 1</td><td>1 wenn mindestens eine Warnung aktiv oder bald</td></tr>
+<tr><td><code>zamg/irgendwas_aktiv</code></td><td>0 / 1</td><td><b>Gate für Morgen-Push:</b> 1 wenn mindestens eine Warnung aktiv oder bald erwartet</td></tr>
 <tr><td><code>zamg/akutwarnung</code></td><td>0 / 1</td><td>1 bei stationsbasierter Akutwarnung (GWA-ID)</td></tr>
-<tr><td><code>zamg/{typ}/stufe</code></td><td>0–4</td><td>Warnstufe für diesen Typ</td></tr>
+<tr><td><code>zamg/letzter_abruf</code></td><td>Datum/Uhrzeit</td><td>Zeitstempel des letzten erfolgreichen ZAMG-Abrufs</td></tr>
+<tr><td><code>zamg/{typ}/stufe</code></td><td>0–4</td><td>Warnstufe für diesen Typ (0=keine, 1=Gelb, 2=Orange, 3=Rot, 4=Lila)</td></tr>
 <tr><td><code>zamg/{typ}/aktiv</code></td><td>0 / 1</td><td>1 = Warnung läuft gerade</td></tr>
 <tr><td><code>zamg/{typ}/bald</code></td><td>0 / 1</td><td>1 = Warnung beginnt in &lt;30 Minuten</td></tr>
-<tr><td><code>zamg/{typ}/start_epoch</code></td><td>Unix-TS</td><td>Startzeit als Unix-Timestamp</td></tr>
-<tr><td><code>zamg/{typ}/end_epoch</code></td><td>Unix-TS</td><td>Endzeit als Unix-Timestamp</td></tr>
-<tr><td><code>zamg/{typ}/start_text</code></td><td>Text</td><td>Startzeit als lesbarer String (z.B. "heute 14:00")</td></tr>
-<tr><td><code>zamg/{typ}/end_text</code></td><td>Text</td><td>Endzeit als lesbarer String</td></tr>
+<tr><td><code>zamg/{typ}/start_epoch</code></td><td>Unix-TS</td><td>Startzeit als Unix-Timestamp (0 = keine Warnung)</td></tr>
+<tr><td><code>zamg/{typ}/end_epoch</code></td><td>Unix-TS</td><td>Endzeit als Unix-Timestamp (0 = keine Warnung)</td></tr>
 <tr><td><code>zamg/{typ}/notification</code></td><td>Text</td><td>Fertiger Push-Text, z.B. "ORANGE – Wind | heute 14:00 – morgen 06:00 | Sturmböen erwartet"</td></tr>
 </tbody>
 </table>
@@ -129,6 +131,7 @@ code { background:#f0f0f0; padding:1px 4px; border-radius:3px; font-size:10px; f
 <tr><td><code>inca/fx_max_30min</code></td><td>km/h</td><td>Max. Böen in den nächsten 30 Minuten</td></tr>
 <tr><td><code>inca/fx_max_60min</code></td><td>km/h</td><td>Max. Böen in der nächsten Stunde</td></tr>
 <tr><td><code>inca/rr</code></td><td>mm/h</td><td>Aktuelle Niederschlagsintensität</td></tr>
+<tr><td><code>inca/regen_alarm</code></td><td>0 / 1</td><td>1 = aktuelle Regenrate ≥ konfigurierter REGEN_ALARM-Schwelle (Standard: 10 mm/h)</td></tr>
 <tr><td><code>inca/pt</code></td><td>1/2/3/4/5/255</td><td>Niederschlagstyp-Code: 1=Regen, 2=Schnee, 3=Schneeregen, 4=Graupel, 5=Hagel, 255=kein</td></tr>
 <tr><td><code>inca/pt_name</code></td><td>Text</td><td>Niederschlagstyp als Text (Sprache je nach Einstellung)</td></tr>
 <tr><td><code>inca/bald_regen</code></td><td>0 / 1</td><td>1 = Regen kommt in &lt;30 Minuten</td></tr>
@@ -137,6 +140,7 @@ code { background:#f0f0f0; padding:1px 4px; border-radius:3px; font-size:10px; f
 <tr><td><code>inca/bald_sturm_30</code></td><td>0 / 1</td><td>1 = Sturmböen (&gt;Alarm-Schwelle) in &lt;30 Minuten</td></tr>
 <tr><td><code>inca/bald_sturm_60</code></td><td>0 / 1</td><td>1 = Sturmböen in &lt;60 Minuten</td></tr>
 <tr><td><code>inca/minuten_bis_regen</code></td><td>Minuten / -1</td><td>Geschätzte Zeit bis zum nächsten Regen. -1 = kein Regen in Sicht.</td></tr>
+<tr><td><code>inca/letzter_abruf</code></td><td>Datum/Uhrzeit</td><td>Zeitstempel des letzten erfolgreichen INCA-Abrufs</td></tr>
 </tbody>
 </table>
 </div>
@@ -159,6 +163,8 @@ code { background:#f0f0f0; padding:1px 4px; border-radius:3px; font-size:10px; f
 <tr><td><code>tawes/druck_trend</code></td><td>hPa/10min</td><td>Luftdrucktendenz der nächstgelegenen Upstream-Station. Negativ = fallend.</td></tr>
 <tr><td><code>tawes/gewitter_signal</code></td><td>0 / 1 / 2</td><td>0=kein, 1=Gewittergefahr (Druckabfall + hohe Feuchte), 2=akut (zusätzl. starke Böen)</td></tr>
 <tr><td><code>tawes/naechste_station</code></td><td>Text</td><td>Name, Distanz und Richtung der nächsten Upstream-Station</td></tr>
+<tr><td><code>tawes/stationen_anzahl</code></td><td>Anzahl</td><td>Gesamtzahl erreichter TAWES-Stationen im konfigurierten Radius</td></tr>
+<tr><td><code>tawes/letztes_update</code></td><td>Datum/Uhrzeit</td><td>Zeitstempel des letzten erfolgreichen TAWES-Abrufs</td></tr>
 </tbody>
 </table>
 </div>
@@ -194,6 +200,29 @@ code { background:#f0f0f0; padding:1px 4px; border-radius:3px; font-size:10px; f
 <h3>🔧 Integration in Loxone</h3>
 
 <div data-role="collapsible" data-collapsed="false">
+<h4>Wann soll eine Notification gesendet werden?</h4>
+<p>Verwende numerische Topics als Gate – pushe <b>nur wenn der Wert &gt; 0 ist</b>. So vermeidest du leere Meldungen oder Spam wenn keine Warnung anliegt.</p>
+<table class="mqtt-table">
+<thead><tr><th>Anwendungsfall</th><th>Gate</th><th>Loxone-Logik</th></tr></thead>
+<tbody>
+<tr><td><b>Echtzeit-Unwetter-Push</b></td><td><code>alarm/gesamt</code></td><td>Wert wechselt <code>0 → ≥ 1</code>: Push mit <code>notification/alle</code> senden</td></tr>
+<tr><td><b>Morgen-Zusammenfassung ZAMG</b> (z.B. 07:00 Uhr)</td><td><code>zamg/irgendwas_aktiv</code></td><td>Wenn <code>= 1</code> → Push mit <code>notification/geosphere</code>. Bei <code>= 0</code> nichts senden.</td></tr>
+<tr><td><b>Sofort-Alarm bei Warnung Stufe ≥ Orange</b></td><td><code>alarm/stufe</code></td><td>Wert wechselt auf <code>≥ 2</code>: sofortiger Push</td></tr>
+<tr><td><b>Entwarnung</b></td><td><code>alarm/gesamt</code></td><td>Wert fällt von <code>≥ 1 → 0</code>: Push mit <code>notification/geosphere</code> (enthält "✅ Entwarnung")</td></tr>
+<tr><td><b>Markise / Sturmschutz</b></td><td><code>alarm/wind</code></td><td>Wert wechselt auf <code>≥ 2</code>: Markise einfahren</td></tr>
+<tr><td><b>Hagelschutz</b></td><td><code>alarm/hagel</code> oder <code>inca/bald_hagel</code></td><td>Wert wird <code>≥ 1</code>: Aktion auslösen</td></tr>
+</tbody>
+</table>
+<p><b>Stufen-Bedeutung für alarm/* Topics:</b></p>
+<ul style="font-size:12px">
+    <li><code>0</code> = <span class="tag-ok">Ruhig</span> – kein Push senden</li>
+    <li><code>1</code> = <span style="background:#FFEB3B;color:#333;padding:1px 5px;border-radius:3px;font-size:10px">Vorsicht</span> – optionaler Info-Push</li>
+    <li><code>2</code> = <span class="tag-warn">Warnung</span> – Push empfohlen</li>
+    <li><code>3</code> = <span class="tag-err">AKUT</span> – Push zwingend</li>
+</ul>
+</div>
+
+<div data-role="collapsible" data-collapsed="true">
 <h4>Empfohlene Loxone-Bausteine</h4>
 <ul data-role="listview">
 <li><b>Virtual Input (MQTT)</b> – für numerische Werte wie <code>alarm/gewitter</code>, <code>inca/minuten_bis_regen</code></li>
