@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Unwetter4Lox Daemon v0.4.3 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
+"""Unwetter4Lox Daemon v0.4.5 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math
 from datetime import datetime, timezone, timedelta
 from collections import deque
@@ -429,6 +429,19 @@ def correlate_tawes():
 
     # Messdaten abrufen und Ring-Buffer füllen
     raw_data = fetch_tawes_data([st['id'] for st in nearby])
+
+    # Logging: wie viele Stationen haben welche Sensoren (erklärt warum viele "–" zeigen)
+    mit_ff  = sum(1 for v in raw_data.values() if v.get('FF')  is not None)
+    mit_ffx = sum(1 for v in raw_data.values() if v.get('FFX') is not None)
+    mit_rr  = sum(1 for v in raw_data.values() if v.get('RR')  is not None)
+    log.info(f'TAWES API: {len(raw_data)}/{len(nearby)} Stationen erreicht | '
+             f'Wind-Sensoren: {mit_ff} | Böen-Sensoren: {mit_ffx} | Regen-Sensoren: {mit_rr} '
+             f'(Stationen ohne Sensor zeigen "–" in der UI – das ist korrekt)')
+    for sid, v in raw_data.items():
+        sname = next((s['name'] for s in nearby if s['id'] == sid), sid)
+        log.debug(f'  Station {sname}: FF={v.get("FF")} m/s, FFX={v.get("FFX")} m/s, '
+                  f'RR={v.get("RR")} mm, DD={v.get("DD")}°, P={v.get("P")} hPa, RF={v.get("RF")}%')
+
     for sid, vals in raw_data.items():
         if sid not in TAWES_BUFFER:
             TAWES_BUFFER[sid] = deque(maxlen=12)
@@ -476,6 +489,8 @@ def correlate_tawes():
     # Upstream Wind & Sturm
     wind_upstream_kmh = 0.0; sturm_upstream = 0
     if upstream_list:
+        log.info(f'TAWES Upstream ({len(upstream_list)} Stationen aus {dominante_wr_name} {dominante_wr:.0f}°): '
+                 + ', '.join(f'{s["name"]} ({s["dist_km"]}km, FFX={s.get("FFX_kmh","–")}km/h)' for s in upstream_list[:6]))
         ffx_vals = [s['FFX_kmh'] for s in upstream_list if s.get('FFX_kmh') is not None]
         if ffx_vals:
             wind_upstream_kmh = round(max(ffx_vals), 1)
@@ -705,7 +720,7 @@ def save_state(data):
 # ---------------------------------------------------------------------------
 # MQTT publish + State save
 # ---------------------------------------------------------------------------
-def publish_all(zamg, akut, inca, prev_ids, new_ids, status_msg, tawes=None, prev=None):
+def publish_all(zamg, akut, inca, prev_ids, new_ids, status_msg, tawes=None, prev=None, zamg_ok=True, inca_ok=True):
     prev = prev or {}
     all_types = list(WARN_TYPES.values()) + ['hagel']
     for t in all_types:
@@ -751,7 +766,13 @@ def publish_all(zamg, akut, inca, prev_ids, new_ids, status_msg, tawes=None, pre
     if n_alle  != prev.get('_n_alle',  ''):  publish('notification/alle',      n_alle)
 
     now = datetime.now().astimezone(); ts_iso = now.strftime('%d.%m.%Y %H:%M:%S'); ts_epoch = int(now.timestamp())
+    # Separate Timestamps pro Datenquelle: nur aktualisieren wenn der Abruf erfolgreich war
+    zamg_ts  = ts_iso  if zamg_ok  else (prev or {}).get('zamg_letztes_update',  '–')
+    inca_ts  = ts_iso  if inca_ok  else (prev or {}).get('inca_letztes_update',  '–')
+    tawes_ts = (tawes or {}).get('letztes_update', (prev or {}).get('tawes_letztes_update', '–'))
     publish('letzter_abruf_datum', ts_iso); publish('letzter_abruf_epoch', ts_epoch)
+    publish('zamg/letzter_abruf',  zamg_ts)
+    publish('inca/letzter_abruf',  inca_ts)
     publish('status', L['status_ok'] if status_msg == 'OK' else L['status_err'].format(v=status_msg))
     alarm = build_alarm(zamg, inca, tawes or {}, akut)
     publish_alarm(alarm)
@@ -761,6 +782,7 @@ def publish_all(zamg, akut, inca, prev_ids, new_ids, status_msg, tawes=None, pre
         'akutwarnung': akut, 'max_stufe': int(max_stufe), 'irgendwas_aktiv': irgendwas,
         'notification_alle': n_alle, 'alarm': alarm, 'tawes': tawes if tawes else {},
         '_n_geo': n_geo, '_n_inca': n_inca, '_n_tawes': n_tawes, '_n_alle': n_alle,
+        'zamg_letztes_update': zamg_ts, 'inca_letztes_update': inca_ts, 'tawes_letztes_update': tawes_ts,
     })
 
 # ---------------------------------------------------------------------------
@@ -768,39 +790,58 @@ def publish_all(zamg, akut, inca, prev_ids, new_ids, status_msg, tawes=None, pre
 # ---------------------------------------------------------------------------
 def run():
     global _tawes_last_fetch
-    log.info(f'Unwetter4Lox v0.4.3 gestartet | {LAT},{LON} | Lang={LBLANG}')
+    log.info(f'Unwetter4Lox v0.4.5 gestartet | {LAT},{LON} | Lang={LBLANG} | Interval={INTERVAL}s | ZAMG={ZAMG_ENABLED} INCA={INCA_ENABLED} TAWES={TAWES_ENABLED}')
     _tawes_last_fetch = 0
     while True:
         try:
-            if not _mqtt_connected.is_set(): mqtt_connect()
+            if not _mqtt_connected.is_set():
+                log.info('MQTT: Verbindungsaufbau...')
+                if mqtt_connect():
+                    log.info(f'MQTT: Verbunden mit {MQTT_BROKER}:{MQTT_PORT}')
+                else:
+                    log.warning(f'MQTT: Verbindung fehlgeschlagen ({MQTT_BROKER}:{MQTT_PORT}) – Daten werden nicht gesendet')
             prev = load_state(); prev_ids = prev.get('last_warn_ids', [])
             status, zamg, akut, new_ids, inca = 'OK', {}, 0, [], {}
+            zamg_ok = False; inca_ok = False
             if ZAMG_ENABLED:
+                log.debug('GeoSphere ZAMG: Abruf startet...')
                 zamg, akut, new_ids = fetch_zamg()
                 if zamg is None:
                     status, zamg = 'GeoSphere API Error', {}
+                    log.error('GeoSphere ZAMG: API-Fehler – keine Daten')
                 else:
+                    zamg_ok = True
                     aktive = sum(1 for t in zamg.values() if t.get('stufe', 0) > 0)
                     max_st = max((t.get('stufe', 0) for t in zamg.values()), default=0)
-                    log.info(f'ZAMG: {aktive} Warntypen aktiv | max_stufe={max_st} | akut={akut}')
+                    log.info(f'GeoSphere ZAMG: OK | {aktive} Warntypen aktiv | max_stufe={max_st} | akut={akut}')
             if INCA_ENABLED:
+                log.debug('INCA Nowcast: Abruf startet...')
                 inca = fetch_inca()
                 if inca is None:
                     status, inca = ('INCA Error' if status == 'OK' else status + ' & INCA Error'), {}
+                    log.error('INCA Nowcast: API-Fehler – keine Daten')
                 else:
-                    log.info(f'INCA: Boen {inca.get("fx_max_60min",0)} km/h | Regen {inca.get("rr_jetzt",0)} mm/h | ETA {inca.get("minuten_bis_regen",-1)} min | Alarm={inca.get("regen_alarm",0)}')
+                    inca_ok = True
+                    log.info(f'INCA Nowcast: OK | Böen {inca.get("fx_max_60min",0)} km/h | '
+                             f'Regen {inca.get("rr_jetzt",0)} mm/h | ETA {inca.get("minuten_bis_regen",-1)} min | '
+                             f'Regen-Alarm={inca.get("regen_alarm",0)} (>={REGEN_ALARM} mm/h) | '
+                             f'Sturm-Alarm={inca.get("bald_sturm_60",0)} (>={BOEN_ALARM} km/h)')
             # TAWES – nur alle 10min (480s Schwelle)
             tawes = prev.get('tawes', {})
             if TAWES_ENABLED and time.time() - _tawes_last_fetch > 480:
                 try:
+                    log.debug(f'TAWES 360°: Abruf startet (max {TAWES_MAX_KM} km Radius)...')
                     tawes = correlate_tawes()
                     publish_tawes(tawes)
                     _tawes_last_fetch = time.time()
-                    log.info(f'TAWES: {len(tawes.get("alle_stationen",[]))} Stationen | upstream={tawes.get("upstream_aktiv",0)} | regen={tawes.get("regen_upstream",0)}')
+                    log.info(f'TAWES 360°: OK | {len(tawes.get("alle_stationen",[]))} Stationen im Umkreis | '
+                             f'upstream={tawes.get("upstream_aktiv",0)} | regen_upstream={tawes.get("regen_upstream",0)} | '
+                             f'sturm_upstream={tawes.get("sturm_upstream",0)} | gewitter={tawes.get("gewitter_signal",0)}')
                 except Exception as te:
                     log.error(f'TAWES Fehler: {te}')
-            publish_all(zamg, akut, inca, prev_ids, new_ids, status, tawes, prev=prev)
+            publish_all(zamg, akut, inca, prev_ids, new_ids, status, tawes, prev=prev, zamg_ok=zamg_ok, inca_ok=inca_ok)
         except Exception as e: log.error(f'Hauptloop Fehler: {e}')
+        log.debug(f'Schlafen {INTERVAL}s bis zum nächsten Abruf...')
         time.sleep(INTERVAL)
 
 if __name__ == '__main__': run()

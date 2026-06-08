@@ -25,10 +25,17 @@ $lat     = $cfg['LOCATION']['LAT'] ?? '';
 $lon     = $cfg['LOCATION']['LON'] ?? '';
 $coords_set = ($lat !== '' && $lon !== '');
 
-# Daemon-Status
+# Daemon-Status – PID-Check verifiziert zusätzlich den Prozessnamen (verhindert Fehlmeldung bei PID-Wiederverwendung nach Reboot)
 $pidfile        = $lbplogdir . "/daemon.pid";
 $pid            = file_exists($pidfile) ? trim(file_get_contents($pidfile)) : '';
-$daemon_running = $pid && file_exists("/proc/{$pid}");
+$daemon_running = false;
+if ($pid && is_numeric($pid)) {
+    $cmdline = @file_get_contents("/proc/{$pid}/cmdline");
+    if ($cmdline !== false) {
+        $daemon_running = strpos($cmdline, 'unwetter4lox_daemon') !== false
+                       || strpos($cmdline, 'unwetter4lox') !== false;
+    }
+}
 
 # MQTT Broker-Info
 $use_lb_mqtt = ($cfg['MQTT']['USE_LOXBERRY_MQTT'] ?? '1') == '1';
@@ -144,9 +151,19 @@ $header_tc = $any_alarm == 1 ? '#333' : 'white';
             ● Daemon <?= $daemon_running ? $L['MAIN.DAEMON_RUNNING'] : $L['MAIN.DAEMON_STOPPED'] ?>
         </span>
         <p style="font-size:12px;color:#888;margin:4px 0 0">
-            <?= $L['MAIN.LAST_UPDATE'] ?>: <b><?= htmlspecialchars($state['letztes_update'] ?? '–') ?></b>
-            &nbsp; | &nbsp; Status: <span class="status-badge <?= strpos($status,'Error')!==false?'badge-err':'badge-ok' ?>"><?= htmlspecialchars($status) ?></span>
+            Status: <span class="status-badge <?= strpos($status,'Error')!==false?'badge-err':'badge-ok' ?>"><?= htmlspecialchars($status) ?></span>
+            &nbsp;·&nbsp; Letzter Abruf: <b><?= htmlspecialchars($state['letztes_update'] ?? '–') ?></b>
         </p>
+        <table style="font-size:11px;color:#666;margin-top:5px;border-collapse:collapse">
+        <tr>
+            <td>🌩️ GeoSphere:</td>
+            <td style="padding-left:6px"><b><?= htmlspecialchars($state['zamg_letztes_update'] ?? '–') ?></b></td>
+            <td style="padding-left:14px">📊 INCA:</td>
+            <td style="padding-left:6px"><b><?= htmlspecialchars($state['inca_letztes_update'] ?? '–') ?></b></td>
+            <td style="padding-left:14px">🌐 TAWES:</td>
+            <td style="padding-left:6px"><b><?= htmlspecialchars($state['tawes_letztes_update'] ?? $state['tawes']['letztes_update'] ?? '–') ?></b></td>
+        </tr>
+        </table>
     </div>
     <div style="display:flex;gap:8px">
         <?php if ($daemon_running): ?>
