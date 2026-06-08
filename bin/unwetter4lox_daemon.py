@@ -367,7 +367,9 @@ def load_tawes_stations():
     stations = []
     for s in data.get('stations', data.get('features', [])):
         p = s.get('properties', s)
-        sid = str(p.get('id', p.get('station_id', '')))
+        # ID aus properties ODER feature-Level-ID (GeoJSON) – 'or' verhindert str(None)="None"-Bug
+        sid = str(p.get('id') or p.get('station_id') or s.get('id') or '')
+        if not sid or sid == 'None': continue
         name = p.get('name', p.get('station_name', sid))
         lat = float(p.get('lat', p.get('latitude', 0) or 0))
         lon = float(p.get('lon', p.get('longitude', 0) or 0))
@@ -407,17 +409,34 @@ def fetch_tawes_data(station_ids):
     if ts_list:
         try: ts = int(datetime.fromisoformat(ts_list[0].replace('Z', '+00:00')).timestamp())
         except: pass
+    # Schnelles Lookup: angeforderte IDs normalisiert (str) für späteres Matching
+    requested_norm = {str(i): str(i) for i in ids}
+    # Auch int-Varianten registrieren: "11001" ↔ "011001" ↔ 11001
+    for i in ids:
+        s = str(i)
+        try: requested_norm[str(int(s))] = s  # führende Nullen entfernen → auf Original mappen
+        except ValueError: pass
     result = {}
     for feature in data.get('features', []):
         props = feature.get('properties', {})
-        sid = str(props.get('station', feature.get('id', '')))
-        if not sid: continue
+        # 'or' verhindert str(None)="None"-Bug: wenn Schlüssel da aber Wert None ist
+        api_sid = str(props.get('station') or props.get('id') or feature.get('id') or '')
+        if not api_sid or api_sid == 'None': continue
+        # API-ID auf angeforderte ID mappen (normalisiert)
+        matched_id = requested_norm.get(api_sid, api_sid)
         params = props.get('parameters', {})
         def _v(key):
             raw = params.get(key, {}).get('data', [None])
             v = raw[0] if raw else None
             return float(v) if v is not None else None
-        result[sid] = {'ts': ts, 'RR': _v('RR'), 'FF': _v('FF'), 'FFX': _v('FFX'), 'DD': _v('DD'), 'P': _v('P'), 'RF': _v('RF')}
+        result[matched_id] = {'ts': ts, 'RR': _v('RR'), 'FF': _v('FF'), 'FFX': _v('FFX'), 'DD': _v('DD'), 'P': _v('P'), 'RF': _v('RF')}
+    # ID-Mismatch Warnung: wenn API andere IDs zurückgibt als angefordert
+    requested_set = set(str(i) for i in ids)
+    unmatched = set(result.keys()) - requested_set
+    if unmatched:
+        log.warning(f'TAWES ID-Mismatch: {len(unmatched)} API-IDs passen nicht zu Cache-IDs: {list(unmatched)[:3]} '
+                    f'(angefragt z.B.: {list(requested_set)[:3]}). '
+                    f'Station-Cache löschen empfohlen!')
     return result
 
 def correlate_tawes():
@@ -436,10 +455,20 @@ def correlate_tawes():
     mit_rr  = sum(1 for v in raw_data.values() if v.get('RR')  is not None)
     log.info(f'TAWES API: {len(raw_data)}/{len(nearby)} Stationen erreicht | '
              f'Wind-Sensoren: {mit_ff} | Böen-Sensoren: {mit_ffx} | Regen-Sensoren: {mit_rr}')
-    if mit_ffx == 0:
-        log.info('TAWES: Keine Böen-Sensoren in diesem Gebiet aktiv – alle Stationen zeigen "–" für Wind/Böen (TAWES-Netzrealität)')
-    elif mit_ffx < len(raw_data) // 3:
-        log.info(f'TAWES: Nur {mit_ffx} von {len(raw_data)} Stationen haben Böen-Sensoren – typisch für das TAWES-Klimastations-Netz')
+    # ID-Match-Diagnose: wie viele nearby Stationen wurden tatsächlich in raw_data gefunden
+    found_in_raw = sum(1 for st in nearby[:25] if st['id'] in raw_data)
+    requested_count = min(len(nearby), 25)
+    if found_in_raw < requested_count:
+        pct = found_in_raw * 100 // requested_count
+        if pct < 50:
+            log.warning(f'TAWES ID-Mismatch: nur {found_in_raw}/{requested_count} Stationen gefunden ({pct}%)! '
+                        f'Station-Cache vermutlich veraltet – Cache löschen: Einstellungen → TAWES → Cache neu laden')
+        else:
+            log.debug(f'TAWES: {found_in_raw}/{requested_count} Stationen per ID gefunden')
+    if mit_ffx == 0 and found_in_raw == requested_count:
+        log.info('TAWES: Keine Böen-Sensoren in diesem Gebiet aktiv (TAWES-Netzrealität – nur Klimastationen ohne Anemometer)')
+    elif mit_ffx > 0 and mit_ffx < len(raw_data) // 3:
+        log.info(f'TAWES: {mit_ffx} von {len(raw_data)} Stationen haben Böen-Sensoren – typisch für das TAWES-Klimastations-Netz')
     for sid, v in raw_data.items():
         sname = next((s['name'] for s in nearby if s['id'] == sid), sid)
         log.debug(f'  Station {sname}: FF={v.get("FF")} m/s, FFX={v.get("FFX")} m/s, '
