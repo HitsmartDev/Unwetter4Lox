@@ -84,78 +84,79 @@ code { background:#f0f0f0; padding:1px 4px; border-radius:3px; font-size:10px; f
 <div data-role="collapsible" data-collapsed="false">
 <h4>🚦 alarm/ – Aggregierter Gesamtstatus (Kombination aller Quellen)</h4>
 <p>Diese Topics sind für Loxone-Logiken optimiert: ein Wert fasst alle Quellen zusammen.</p>
-<p><b>Wann soll ich pushen?</b> Verwende <code>alarm/gesamt</code> als Gate: Wert wechselt von <code>0</code> → <code>≥ 1</code> = Push senden. Bei <code>0</code> = keine Meldung ausgeben.</p>
+<p><b>Level-Prinzip (alle alarm/-Topics):</b> ZAMG-Stufen werden direkt gemappt – <b>Gelb→1, Orange→2, Rot/Lila→3</b>. Das <code>aktiv</code>-Flag ändert den Level nicht. INCA/TAWES können auf max. Level 2 heben (bei überschrittenen Schwellwerten).</p>
+<p><b>Wann soll ich pushen?</b> Gate: <code>alarm/gesamt</code> wechselt von <code>0</code> → <code>≥ 1</code> = Push senden. Bei <code>0</code> = keine Meldung.</p>
 <table class="mqtt-table">
 <thead><tr><th>Topic</th><th>Werte</th><th>Bedeutung</th></tr></thead>
 <tbody>
-<tr><td><code>alarm/gesamt</code></td><td>0–3</td><td><b>max(gewitter, wind, regen, hagel, schnee)</b> – der höchste Wert aller 5 Kategorien in einer Zahl. 0=ruhig, 1=Vorsicht, 2=Warnung, 3=AKUT. <b>Primärer Gate-Wert für Push-Entscheidungen.</b></td></tr>
-<tr><td><code>alarm/gewitter</code></td><td>0–2</td><td>0=keiner, 1=möglich (ZAMG Stufe 1 Gelb od. TAWES Gewittersignal Lvl 1), 2=akut (ZAMG aktiv od. TAWES Lvl 2)</td></tr>
-<tr><td><code>alarm/wind</code></td><td>0–3</td><td>0=ruhig, 1=INCA/TAWES ≥ BOEN_ALARM od. ZAMG Orange, 2=ZAMG Orange aktiv od. INCA 30min od. TAWES 2×BOEN, 3=ZAMG Rot/Lila aktiv. <b>ZAMG Gelb wird ignoriert</b> – liegt typisch unter der Schwelle.</td></tr>
-<tr><td><code>alarm/regen</code></td><td>0–2</td><td>0=trocken, 1=ZAMG Regen Gelb od. TAWES upstream (ETA &gt;30min), 2=ZAMG aktiv od. INCA ≥ REGEN_ALARM od. TAWES ETA ≤30min. <b>Nieselregen unter REGEN_ALARM löst keinen Alarm aus.</b></td></tr>
-<tr><td><code>alarm/hagel</code></td><td>0–2</td><td>0=kein, 1=möglich (ZAMG Stufe 1 od. INCA bald_hagel od. bald_graupel), 2=ZAMG aktiv</td></tr>
-<tr><td><code>alarm/schnee</code></td><td>0–2</td><td>0=kein, 1=möglich (ZAMG Stufe 1 od. INCA PT=Schnee/Schneeregen), 2=ZAMG aktiv. Inkl. Glatteis.</td></tr>
+<tr><td><code>alarm/gesamt</code></td><td>0–3</td><td><b>max(gewitter, wind, regen, hagel, schnee)</b>. <b>0</b>=ruhig, <b>1</b>=Vorsicht (Gelb/Schwelle), <b>2</b>=Warnung (Orange/überschritten), <b>3</b>=Extrem (Rot/Lila). <b>Primärer Gate-Wert.</b></td></tr>
+<tr><td><code>alarm/gewitter</code></td><td>0–3</td><td><b>1</b>=möglich (ZAMG Gelb od. TAWES Lvl 1), <b>2</b>=Warnung (ZAMG Orange od. TAWES Lvl 2 od. Akutwarnung), <b>3</b>=Extrem (ZAMG Rot/Lila)</td></tr>
+<tr><td><code>alarm/wind</code></td><td>0–3</td><td><b>1</b>=Vorsicht (ZAMG Gelb od. INCA/TAWES ≥ BOEN_ALARM), <b>2</b>=Warnung (ZAMG Orange od. INCA 30min od. TAWES 2×BOEN), <b>3</b>=Extrem (ZAMG Rot/Lila)</td></tr>
+<tr><td><code>alarm/regen</code></td><td>0–2</td><td><b>1</b>=erwartet (ZAMG Gelb od. TAWES upstream), <b>2</b>=Starkregen (ZAMG Orange od. INCA ≥ REGEN_ALARM od. TAWES ETA ≤30min). Nieselregen/bald_regen löst <b>keinen</b> Alarm aus.</td></tr>
+<tr><td><code>alarm/hagel</code></td><td>0–2</td><td><b>1</b>=möglich (ZAMG Gelb od. INCA bald_hagel/graupel), <b>2</b>=Warnung (ZAMG Orange+)</td></tr>
+<tr><td><code>alarm/schnee</code></td><td>0–2</td><td><b>1</b>=möglich (ZAMG Gelb od. INCA PT=Schnee/Schneeregen), <b>2</b>=Warnung (ZAMG Orange+). Inkl. Glatteis.</td></tr>
 <tr><td><code>alarm/stufe</code></td><td>0–4</td><td>Höchste <b>offizielle ZAMG</b>-Warnstufe (nur ZAMG, kein INCA/TAWES)</td></tr>
 <tr><td><code>alarm/zusammenfassung</code></td><td>Text</td><td>Fertiger Anzeigetext aus allen aktiven Kategorien. Ideal für Loxone-Statusfeld. Mögliche Werte: <br>
 <code>✅ Keine Warnungen</code> (alles 0)<br>
-<code>⚡ Gewitter möglich</code> / <code>⚡ Gewitter AKUT</code><br>
-<code>💨 Erhöhte Windgefahr</code> / <code>💨 Sturm aktiv</code> / <code>💨 Extremsturm</code><br>
+<code>⚡ Gewitter möglich</code> / <code>⚡ Gewitter Warnung</code> / <code>⚡ Gewitter EXTREM</code><br>
+<code>💨 Wind Vorsicht</code> / <code>💨 Sturm Warnung</code> / <code>💨 Extremsturm</code><br>
 <code>🌧 Regen erwartet</code> / <code>🌧 Starkregen</code><br>
-<code>🌨 Hagelgefahr</code> / <code>🌨 Hagel AKTIV</code><br>
-<code>❄️ Schnee/Eis möglich</code> / <code>❄️ Schnee/Eis AKTIV</code><br>
-Mehrere Kategorien: <code>⚡ Gewitter AKUT | 💨 Sturm aktiv</code></td></tr>
+<code>🌨 Hagelgefahr</code> / <code>🌨 Hagel Warnung</code><br>
+<code>❄️ Schnee/Eis möglich</code> / <code>❄️ Schnee/Eis Warnung</code><br>
+Mehrere Kategorien: <code>⚡ Gewitter Warnung | 💨 Sturm Warnung</code></td></tr>
 </tbody>
 </table>
 </div>
 
 <div data-role="collapsible" data-collapsed="true">
 <h4>🔢 Wie werden alarm/ Topics berechnet? (Detaillogik)</h4>
-<p>Jede Kategorie kombiniert die drei Quellen ZAMG, INCA und TAWES nach folgenden Regeln:</p>
+<p>Jede Kategorie kombiniert ZAMG, INCA und TAWES. <b>Es gewinnt immer der höchste Wert</b> (max). ZAMG-Stufe entscheidet den Basis-Level, INCA/TAWES können auf max. Level 2 heben.</p>
 
-<p><b>alarm/wind</b> – ZAMG Gelb (Stufe 1) wird absichtlich ignoriert, da ZAMG Gelb-Wind typisch unterhalb der konfigurierten BOEN_ALARM-Schwelle liegt und sonst dauerhaft feuern würde.</p>
+<p><b>alarm/gewitter</b></p>
 <table class="mqtt-table">
 <thead><tr><th>Quelle</th><th>Bedingung</th><th>→ Level</th></tr></thead>
 <tbody>
-<tr><td>INCA</td><td>Böen ≥ BOEN_ALARM in &lt;60 min</td><td>1</td></tr>
-<tr><td>TAWES</td><td>Upstream-Böen ≥ BOEN_ALARM</td><td>1</td></tr>
-<tr><td>ZAMG</td><td>Wind Orange (Stufe 2, nicht aktiv)</td><td>1</td></tr>
-<tr><td>INCA</td><td>Böen ≥ BOEN_ALARM in &lt;30 min</td><td>2</td></tr>
-<tr><td>TAWES</td><td>Upstream-Böen ≥ 2 × BOEN_ALARM</td><td>2</td></tr>
-<tr><td>ZAMG</td><td>Wind Orange (Stufe 2) <b>aktiv</b></td><td>2</td></tr>
-<tr><td>ZAMG</td><td>Wind Rot (Stufe 3) <b>aktiv</b></td><td>3</td></tr>
-<tr><td>ZAMG</td><td>Wind Lila (Stufe 4)</td><td>3</td></tr>
+<tr><td>ZAMG</td><td>Gewitter Gelb (Stufe 1)</td><td><b>1</b></td></tr>
+<tr><td>TAWES</td><td>Gewittersignal Lvl 1 (Druckabfall + hohe Feuchte)</td><td><b>1</b></td></tr>
+<tr><td>ZAMG</td><td>Gewitter Orange (Stufe 2)</td><td><b>2</b></td></tr>
+<tr><td>TAWES</td><td>Gewittersignal Lvl 2 (+ starke Böenzunahme)</td><td><b>2</b></td></tr>
+<tr><td>System</td><td>Behördliche Akutwarnung (GWA)</td><td><b>≥ 2</b></td></tr>
+<tr><td>ZAMG</td><td>Gewitter Rot/Lila (Stufe 3/4)</td><td><b>3</b></td></tr>
 </tbody>
 </table>
 
-<p style="margin-top:8px"><b>alarm/regen</b> – <code>inca/bald_regen</code> und Regenraten unter REGEN_ALARM lösen keinen Alarm aus. Für Bewässerungsabschaltung bei jedem Tropfen direkt <code>inca/bald_regen</code> in Loxone verwenden.</p>
+<p style="margin-top:8px"><b>alarm/wind</b></p>
 <table class="mqtt-table">
 <thead><tr><th>Quelle</th><th>Bedingung</th><th>→ Level</th></tr></thead>
 <tbody>
-<tr><td>ZAMG</td><td>Regen Gelb (Stufe 1)</td><td>1</td></tr>
-<tr><td>TAWES</td><td>Regenfront upstream, ETA &gt;30 min</td><td>1</td></tr>
-<tr><td>ZAMG</td><td>Regen-Warnung <b>aktiv</b></td><td>2</td></tr>
-<tr><td>INCA</td><td>Regenrate ≥ REGEN_ALARM (= <code>inca/regen_alarm</code>)</td><td>2</td></tr>
-<tr><td>TAWES</td><td>Regenfront upstream, ETA ≤30 min</td><td>2</td></tr>
+<tr><td>ZAMG</td><td>Wind Gelb (Stufe 1)</td><td><b>1</b></td></tr>
+<tr><td>INCA</td><td>Böen ≥ BOEN_ALARM in &lt;60 min</td><td><b>1</b></td></tr>
+<tr><td>TAWES</td><td>Upstream-Böen ≥ BOEN_ALARM</td><td><b>1</b></td></tr>
+<tr><td>ZAMG</td><td>Wind Orange (Stufe 2)</td><td><b>2</b></td></tr>
+<tr><td>INCA</td><td>Böen ≥ BOEN_ALARM in &lt;30 min</td><td><b>2</b></td></tr>
+<tr><td>TAWES</td><td>Upstream-Böen ≥ 2 × BOEN_ALARM</td><td><b>2</b></td></tr>
+<tr><td>ZAMG</td><td>Wind Rot/Lila (Stufe 3/4)</td><td><b>3</b></td></tr>
 </tbody>
 </table>
 
-<p style="margin-top:8px"><b>alarm/gewitter</b></p>
+<p style="margin-top:8px"><b>alarm/regen</b> – <code>inca/bald_regen</code> und Regenraten unter REGEN_ALARM lösen keinen Alarm aus. Für Bewässerungsabschaltung direkt <code>inca/bald_regen</code> in Loxone verwenden.</p>
 <table class="mqtt-table">
 <thead><tr><th>Quelle</th><th>Bedingung</th><th>→ Level</th></tr></thead>
 <tbody>
-<tr><td>ZAMG</td><td>Gewitter Gelb (Stufe 1)</td><td>1</td></tr>
-<tr><td>TAWES</td><td>Gewittersignal Level 1 (Druckabfall + hohe Feuchte)</td><td>1</td></tr>
-<tr><td>ZAMG</td><td>Gewitter-Warnung <b>aktiv</b></td><td>2</td></tr>
-<tr><td>TAWES</td><td>Gewittersignal Level 2 (+ starke Böenzunahme)</td><td>2</td></tr>
-<tr><td>System</td><td>Behördliche Akutwarnung (GWA)</td><td>≥ 2</td></tr>
+<tr><td>ZAMG</td><td>Regen Gelb (Stufe 1)</td><td><b>1</b></td></tr>
+<tr><td>TAWES</td><td>Regenfront upstream, ETA &gt;30 min</td><td><b>1</b></td></tr>
+<tr><td>ZAMG</td><td>Regen Orange/höher (Stufe 2+)</td><td><b>2</b></td></tr>
+<tr><td>INCA</td><td>Regenrate ≥ REGEN_ALARM (= <code>inca/regen_alarm</code>)</td><td><b>2</b></td></tr>
+<tr><td>TAWES</td><td>Regenfront upstream, ETA ≤30 min</td><td><b>2</b></td></tr>
 </tbody>
 </table>
 
 <p style="margin-top:8px"><b>alarm/hagel &amp; alarm/schnee</b></p>
 <table class="mqtt-table">
-<thead><tr><th>Kategorie</th><th>Level 1 (Vorsicht)</th><th>Level 2 (Aktiv)</th></tr></thead>
+<thead><tr><th>Kategorie</th><th>Level 1 (Vorsicht)</th><th>Level 2 (Warnung)</th></tr></thead>
 <tbody>
-<tr><td><code>alarm/hagel</code></td><td>ZAMG Stufe 1 od. INCA bald_hagel od. bald_graupel</td><td>ZAMG Warnung aktiv</td></tr>
-<tr><td><code>alarm/schnee</code></td><td>ZAMG Stufe 1 od. INCA PT=Schnee/Schneeregen</td><td>ZAMG Warnung aktiv</td></tr>
+<tr><td><code>alarm/hagel</code></td><td>ZAMG Gelb od. INCA bald_hagel/graupel</td><td>ZAMG Orange+</td></tr>
+<tr><td><code>alarm/schnee</code></td><td>ZAMG Gelb od. INCA PT=Schnee/Schneeregen</td><td>ZAMG Orange+</td></tr>
 </tbody>
 </table>
 </div>

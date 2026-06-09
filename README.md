@@ -55,78 +55,75 @@ Das Plugin sucht alle TAWES-Stationen im einstellbaren Umkreis und wertet deren 
 
 ---
 
-## Alarmstufen verstehen
+## Alarmstufen – Prinzip
 
-Die `alarm/`-Topics kombinieren alle drei Datenquellen zu **einheitlichen Stufen**:
+Alle `alarm/`-Topics verwenden **einheitliche Level** mit gleicher Bedeutung über alle Kategorien:
 
-| Wert | Bedeutung | Typischer Auslöser |
-|:----:|:----------|:-------------------|
-| `0` | Keine Gefahr | Alles ruhig |
-| `1` | Möglich / Vorsicht | Warnung in Sicht oder Messwerte nähern sich Schwelle |
-| `2` | Aktiv / Warnung | Warnung läuft, Schwelle überschritten |
-| `3` | AKUT / Extrem | Extreme ZAMG-Warnung (Rot/Lila) aktiv |
+| Level | Bedeutung | Für Automatisierungen |
+|:-----:|:----------|:----------------------|
+| `0` | Ruhig | Keine Aktion |
+| `1` | **Vorsicht** – etwas kündigt sich an | Info-Push, vorsorglich handeln |
+| `2` | **Warnung** – es wird gefährlich | Schutzmaßnahmen aktiv, Push-Alarm senden |
+| `3` | **Extrem** – höchste Gefahr | Sofortmaßnahmen, zwingender Alarm |
 
-`alarm/gesamt` = `max(gewitter, wind, regen, hagel, schnee)` – der höchste Einzelwert aller Kategorien in einer Zahl. Ideal als einziger Gate-Wert in Loxone-Automatisierungen.
+**Grundprinzip:** ZAMG-Warnstufen werden **direkt** gemappt: **Gelb → 1, Orange → 2, Rot/Lila → 3**. Das `aktiv`-Flag spielt keine Rolle für den Level – die ZAMG-Stufe entscheidet allein. INCA und TAWES können den Level auf maximal 2 anheben (über ihre Messschwellen).
+
+`alarm/gesamt` = `max(gewitter, wind, regen, hagel, schnee)` – der höchste Wert aller 5 Kategorien. Ideal als einziger Gate-Wert in Loxone-Automatisierungen.
 
 ---
 
 ## Wie werden die alarm/ Topics berechnet?
 
-Jede Kategorie kombiniert mehrere Quellen. **Wichtig:** INCA und TAWES feuern nur bei konfigurierten Schwellwerten – nicht bei jedem Nieselregen oder leichter Brise.
-
 ### alarm/gewitter
 
 | Quelle | Bedingung | → Level |
-|:-------|:----------|:--------|
-| ZAMG | Gewitter-Warnung Stufe 1 (Gelb) | 1 |
-| TAWES | Gewittersignal Level 1 (Druckabfall + hohe Feuchte) | 1 |
-| ZAMG | Gewitter-Warnung aktiv (läuft gerade) | 2 |
-| TAWES | Gewittersignal Level 2 (+ starke Böenzunahme) | 2 |
-| System | Behördliche Akutwarnung (GWA) | ≥ 2 |
+|:-------|:----------|:-------:|
+| ZAMG | Gewitter-Warnung Gelb (Stufe 1) | **1** |
+| TAWES | Gewittersignal Lvl 1 (Druckabfall + hohe Feuchte) | **1** |
+| ZAMG | Gewitter-Warnung Orange (Stufe 2) | **2** |
+| TAWES | Gewittersignal Lvl 2 (+ starke Böenzunahme) | **2** |
+| System | Behördliche Akutwarnung (GWA) | **≥ 2** |
+| ZAMG | Gewitter-Warnung Rot/Lila (Stufe 3/4) | **3** |
 
 ### alarm/wind
 
 | Quelle | Bedingung | → Level |
-|:-------|:----------|:--------|
-| INCA | Böen ≥ **BOEN_ALARM** in < 60 min | 1 |
-| TAWES | Upstream-Böen ≥ **BOEN_ALARM** | 1 |
-| ZAMG | Wind-Warnung Stufe 2 Orange (nicht aktiv) | 1 |
-| INCA | Böen ≥ **BOEN_ALARM** in < 30 min | 2 |
-| TAWES | Upstream-Böen ≥ **2 × BOEN_ALARM** | 2 |
-| ZAMG | Wind-Warnung Stufe 2 Orange **aktiv** | 2 |
-| ZAMG | Wind-Warnung Stufe 3 Rot **aktiv** | 3 |
-| ZAMG | Wind-Warnung Stufe 4 Lila | 3 |
-
-> **Hinweis:** ZAMG Stufe 1 Gelb wird für Wind **ignoriert** – liegt typisch unter der konfigurierten BOEN_ALARM-Schwelle und würde auch ohne echte Gefahr dauerhaft feuern.
+|:-------|:----------|:-------:|
+| ZAMG | Wind-Warnung Gelb (Stufe 1) | **1** |
+| INCA | Böen ≥ **BOEN_ALARM** in < 60 min | **1** |
+| TAWES | Upstream-Böen ≥ **BOEN_ALARM** | **1** |
+| ZAMG | Wind-Warnung Orange (Stufe 2) | **2** |
+| INCA | Böen ≥ **BOEN_ALARM** in < 30 min | **2** |
+| TAWES | Upstream-Böen ≥ **2 × BOEN_ALARM** | **2** |
+| ZAMG | Wind-Warnung Rot/Lila (Stufe 3/4) | **3** |
 
 ### alarm/regen
 
 | Quelle | Bedingung | → Level |
-|:-------|:----------|:--------|
-| ZAMG | Regen-Warnung Stufe 1 (Gelb) | 1 |
-| TAWES | Regenfront upstream, ETA > 30 min | 1 |
-| ZAMG | Regen-Warnung aktiv (läuft gerade) | 2 |
-| INCA | Regenrate ≥ **REGEN_ALARM** (`inca/regen_alarm = 1`) | 2 |
-| TAWES | Regenfront upstream, ETA ≤ 30 min | 2 |
+|:-------|:----------|:-------:|
+| ZAMG | Regen-Warnung Gelb (Stufe 1) | **1** |
+| TAWES | Regenfront upstream, ETA > 30 min | **1** |
+| ZAMG | Regen-Warnung Orange/höher | **2** |
+| INCA | Aktuelle Regenrate ≥ **REGEN_ALARM** (`inca/regen_alarm`) | **2** |
+| TAWES | Regenfront upstream, ETA ≤ 30 min | **2** |
 
-> **Hinweis:** `inca/bald_regen` und Regenrate < REGEN_ALARM werden **nicht** für `alarm/regen` verwendet – zu sensibel für Nieselregen. Für Bewässerungsabschaltung bei jedem Tropfen: `inca/bald_regen` direkt in Loxone verwenden.
+> `inca/bald_regen` und Regenraten unter REGEN_ALARM werden absichtlich **nicht** für `alarm/regen` verwendet. Wer auf leichten Regen reagieren will (Bewässerung), nimmt `inca/bald_regen` direkt als Trigger in Loxone.
 
 ### alarm/hagel
 
 | Quelle | Bedingung | → Level |
-|:-------|:----------|:--------|
-| ZAMG | Hagel-Warnung Stufe 1 | 1 |
-| INCA | Hagel möglich in < 60 min (`bald_hagel`) | 1 |
-| INCA | Graupel möglich in < 60 min (`bald_graupel`) | 1 |
-| ZAMG | Hagel-Warnung aktiv | 2 |
+|:-------|:----------|:-------:|
+| ZAMG | Hagel-Warnung Gelb (Stufe 1) | **1** |
+| INCA | Hagel oder Graupel möglich (`bald_hagel` / `bald_graupel`) | **1** |
+| ZAMG | Hagel-Warnung Orange/höher (Stufe 2+) | **2** |
 
 ### alarm/schnee
 
 | Quelle | Bedingung | → Level |
-|:-------|:----------|:--------|
-| ZAMG | Schnee- oder Glatteis-Warnung Stufe 1 | 1 |
-| INCA | Niederschlagstyp = Schnee (PT=2) oder Schneeregen (PT=3) | 1 |
-| ZAMG | Schnee- oder Glatteis-Warnung aktiv | 2 |
+|:-------|:----------|:-------:|
+| ZAMG | Schnee- oder Glatteis-Warnung Gelb (Stufe 1) | **1** |
+| INCA | Niederschlagstyp = Schnee (PT=2) oder Schneeregen (PT=3) | **1** |
+| ZAMG | Schnee- oder Glatteis-Warnung Orange/höher (Stufe 2+) | **2** |
 
 ---
 

@@ -683,72 +683,77 @@ def publish_tawes(tawes):
 # ---------------------------------------------------------------------------
 def build_alarm(zamg, inca, tawes, akut):
     """Kombiniert ZAMG + INCA + TAWES zu einem einheitlichen Alarm-Dict.
-    Level: 0=keine, 1=möglich/Vorsicht, 2=aktiv/Warnung, 3=akut/extrem"""
+    Level: 0=ruhig, 1=Vorsicht (Gelb/Schwelle), 2=Warnung (Orange/überschritten), 3=Extrem (Rot/Lila)
+    ZAMG-Stufe mappt direkt: Gelb→1, Orange→2, Rot/Lila→3. aktiv-Flag ändert das Level nicht."""
 
-    # Gewitter
-    gewitter = 0
-    if zamg.get('gewitter', {}).get('stufe', 0) >= 1: gewitter = 1
-    if zamg.get('gewitter', {}).get('aktiv', 0):      gewitter = 2
-    tawes_g = tawes.get('gewitter_signal', 0)
-    gewitter = max(gewitter, tawes_g)
+    # Gewitter: ZAMG Gelb→1, Orange→2, Rot/Lila→3; TAWES Signal 0/1/2 direkt verwendbar
+    g_stufe = zamg.get('gewitter', {}).get('stufe', 0)
+    if g_stufe >= 3:   gewitter = 3
+    elif g_stufe == 2: gewitter = 2
+    elif g_stufe == 1: gewitter = 1
+    else:              gewitter = 0
+    gewitter = max(gewitter, tawes.get('gewitter_signal', 0))  # TAWES: 0=kein, 1=möglich, 2=akut
     if akut: gewitter = max(gewitter, 2)
 
-    # Wind – INCA/TAWES nur bei >= BOEN_ALARM; ZAMG nur ab Stufe 2 (Orange) als Level 1
-    # Begründung: ZAMG Stufe 1 (Gelb) oft unterhalb der konfigurierten BOEN_ALARM-Schwelle
-    zamg_wind_stufe = zamg.get('wind', {}).get('stufe', 0)
-    if zamg_wind_stufe >= 2:
-        wind = zamg_wind_stufe - 1          # ZAMG Orange (2) → alarm 1, Rot (3) → 2, Lila (4) → 3
-        if zamg.get('wind', {}).get('aktiv', 0): wind = min(3, wind + 1)
-    else:
-        wind = 0                            # ZAMG Gelb (1) wird ignoriert – liegt oft < BOEN_ALARM
-    if inca.get('bald_sturm_30'):   wind = max(wind, 2)  # INCA >= BOEN_ALARM in 30min
-    elif inca.get('bald_sturm_60'): wind = max(wind, 1)  # INCA >= BOEN_ALARM in 60min
+    # Wind: ZAMG Gelb→1, Orange→2, Rot/Lila→3; INCA/TAWES nur bei >= BOEN_ALARM-Schwelle
+    w_stufe = zamg.get('wind', {}).get('stufe', 0)
+    if w_stufe >= 3:   wind = 3
+    elif w_stufe == 2: wind = 2
+    elif w_stufe == 1: wind = 1
+    else:              wind = 0
+    if inca.get('bald_sturm_30'):   wind = max(wind, 2)  # Böen >= BOEN_ALARM in 30min
+    elif inca.get('bald_sturm_60'): wind = max(wind, 1)  # Böen >= BOEN_ALARM in 60min
     tawes_wind = float(tawes.get('wind_upstream_kmh', 0) or 0)
-    if tawes_wind >= BOEN_ALARM * 2.0: wind = max(wind, 2)
-    elif tawes_wind >= BOEN_ALARM:     wind = max(wind, 1)
+    if tawes_wind >= BOEN_ALARM * 2.0: wind = max(wind, 2)  # Doppelte Schwelle upstream
+    elif tawes_wind >= BOEN_ALARM:     wind = max(wind, 1)  # Schwelle upstream erreicht
 
-    # Regen – nur bei konfigurierten Schwellen (REGEN_ALARM) oder echter Regenfront (TAWES)
-    # bald_regen (Nieselregen) und rr < REGEN_ALARM intentional weggelassen – zu sensibel
-    regen = 0
-    if zamg.get('regen', {}).get('stufe', 0) >= 1: regen = 1
-    if zamg.get('regen', {}).get('aktiv', 0):      regen = 2
-    if inca.get('regen_alarm'):                     regen = max(regen, 2)  # >= REGEN_ALARM mm/h
+    # Regen: ZAMG Gelb→1, Orange/höher→2; INCA nur bei >= REGEN_ALARM; TAWES Regenfront
+    # bald_regen und rr < REGEN_ALARM absichtlich nicht verwendet – zu sensibel für Nieselregen
+    r_stufe = zamg.get('regen', {}).get('stufe', 0)
+    if r_stufe >= 2:   regen = 2
+    elif r_stufe == 1: regen = 1
+    else:              regen = 0
+    if inca.get('regen_alarm'):  regen = max(regen, 2)  # Aktuelle Rate >= REGEN_ALARM mm/h
     if tawes.get('regen_upstream'):
         eta = tawes.get('regen_eta_min', -1)
         regen = max(regen, 2 if 0 <= eta <= 30 else 1)
 
-    # Hagel
-    hagel = 0
-    if zamg.get('hagel', {}).get('stufe', 0) >= 1: hagel = 1
-    if zamg.get('hagel', {}).get('aktiv', 0):      hagel = 2
+    # Hagel: ZAMG Gelb→1, Orange/höher→2; INCA bald_hagel/graupel→1
+    h_stufe = zamg.get('hagel', {}).get('stufe', 0)
+    if h_stufe >= 2:   hagel = 2
+    elif h_stufe == 1: hagel = 1
+    else:              hagel = 0
     if inca.get('bald_hagel'):   hagel = max(hagel, 1)
     if inca.get('bald_graupel'): hagel = max(hagel, 1)
 
-    # Schnee/Eis
-    schnee = max(zamg.get('schnee', {}).get('stufe', 0), zamg.get('glatteis', {}).get('stufe', 0))
-    if schnee > 0 and (zamg.get('schnee', {}).get('aktiv') or zamg.get('glatteis', {}).get('aktiv')): schnee = min(3, schnee + 1)
-    if inca.get('pt_jetzt') in [2, 3]: schnee = max(schnee, 1)
+    # Schnee/Glatteis: max(ZAMG schnee, glatteis) Gelb→1, Orange/höher→2; INCA Niederschlagstyp
+    s_stufe = max(zamg.get('schnee', {}).get('stufe', 0), zamg.get('glatteis', {}).get('stufe', 0))
+    if s_stufe >= 2:   schnee = 2
+    elif s_stufe == 1: schnee = 1
+    else:              schnee = 0
+    if inca.get('pt_jetzt') in (2, 3): schnee = max(schnee, 1)  # 2=Schnee, 3=Schneeregen
 
     # Gesamtstatus: höchster Wert aller Kategorien
     gesamt = max(gewitter, wind, regen, hagel, schnee)
 
-    # Gesamtstufe (max aus ZAMG für Referenz)
+    # Gesamtstufe (max aus ZAMG für Referenz, unverändert 0-4)
     all_types = list(WARN_TYPES.values()) + ['hagel']
     max_stufe = max((zamg.get(t, {}).get('stufe', 0) for t in all_types), default=0)
 
-    # Zusammenfassung
+    # Zusammenfassung – Texte spiegeln neue Level-Semantik wider
     parts = []
-    if gewitter >= 2: parts.append('⚡ Gewitter AKUT')
-    elif gewitter:    parts.append('⚡ Gewitter möglich')
-    if wind >= 3:     parts.append('💨 Extremsturm')
-    elif wind == 2:   parts.append('💨 Sturm aktiv')
-    elif wind:        parts.append('💨 Erhöhte Windgefahr')
-    if hagel >= 2:    parts.append('🌨 Hagel AKTIV')
-    elif hagel:       parts.append('🌨 Hagelgefahr')
-    if regen >= 2:    parts.append('🌧 Starkregen')
-    elif regen:       parts.append('🌧 Regen erwartet')
-    if schnee >= 2:   parts.append('❄️ Schnee/Eis AKTIV')
-    elif schnee:      parts.append('❄️ Schnee/Eis möglich')
+    if gewitter >= 3:   parts.append('⚡ Gewitter EXTREM')
+    elif gewitter == 2: parts.append('⚡ Gewitter Warnung')
+    elif gewitter:      parts.append('⚡ Gewitter möglich')
+    if wind >= 3:       parts.append('💨 Extremsturm')
+    elif wind == 2:     parts.append('💨 Sturm Warnung')
+    elif wind:          parts.append('💨 Wind Vorsicht')
+    if hagel >= 2:      parts.append('🌨 Hagel Warnung')
+    elif hagel:         parts.append('🌨 Hagelgefahr')
+    if regen >= 2:      parts.append('🌧 Starkregen')
+    elif regen:         parts.append('🌧 Regen erwartet')
+    if schnee >= 2:     parts.append('❄️ Schnee/Eis Warnung')
+    elif schnee:        parts.append('❄️ Schnee/Eis möglich')
     zusammenfassung = ' | '.join(parts) if parts else '✅ Keine Warnungen'
 
     return {
