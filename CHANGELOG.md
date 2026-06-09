@@ -5,6 +5,86 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [0.4.17] – 2026-06-09
+
+### Behoben
+- TAWES Stationen nach Installation fehlend: Daemon lädt beim ersten Start nach Plugin-Update die Stationsliste jetzt immer frisch von der API (Cache-File wird beim Daemon-Start einmalig ignoriert). Verhindert Race-Condition zwischen postinstall.sh und Daemon-Start.
+- `alarm/regen` Level 1 feuerte bei Nieselregen obwohl REGEN_ALARM=30 mm/h gesetzt: TAWES `regen_upstream` löst jetzt nur einen Alarm aus wenn die Upstream-Intensität (`tawes/regen_upstream_mm`) ≥ REGEN_ALARM/3 ist.
+- Unit-Bug: TAWES RR war in mm/10min, `regen_upstream_mm` wurde ohne ×6-Faktor mit REGEN_ALARM (mm/h) verglichen (bei hohen Schwellen durch Zufall korrekt, bei 2 mm/h falsch).
+
+### Hinzugefügt
+- Neues MQTT-Topic `tawes/regen_upstream_mm` (mm/h): Max. Regenintensität an Upstream-Stationen – für Diagnose und als Alarm-Gate
+- UI zeigt Upstream-Regenintensität in der Regenfront-Zeile an (z.B. "Ankunft unbekannt (3.6 mm/h)")
+
+### Dokumentation
+- README + help.php: Alarm/regen-Tabelle mit TAWES Intensitäts-Gate (REGEN_ALARM/3) ergänzt
+- README + help.php: `tawes/regen_upstream_mm` als neues Topic dokumentiert
+- Regen-Alarmschwelle Beschreibung erklärt TAWES-Threshold-Beziehung
+- help.php FAQ: Startup-Fresh-Load Verhalten bei TAWES-Stationen erklärt
+- Versionsstrings im Daemon korrigiert (waren noch v0.4.5)
+
+---
+
+## [0.4.16] – 2026-06-09
+
+### Behoben
+- Notification-Spam: ETA-Werte und Windstärken werden auf 5er-Schritte gerundet bevor Dedup-Vergleich (verhindert Push alle 5 min durch reine Countdown-Änderung)
+- `bald_regen`-Notification nur noch wenn REGEN_ALARM ≤ 2.0 mm/h oder `regen_alarm=1` aktiv – verhindert Spam bei hoher Alarmschwelle
+- TAWES Wind-Notification zeigt jetzt Stationsname und Distanz: "💨 Sturmböen Rax (78km): 90 km/h" statt nur "90 km/h"
+
+---
+
+## [0.4.15] – 2026-06-08
+
+### Behoben
+- `notification/tawes` wurde doppelt publiziert (in `publish_tawes()` ohne Dedup + in `publish_all()` mit Dedup) – Duplikat entfernt
+- `notification/tawes` zeigt jetzt "keine aktiven Warnungen" wenn leer (wie geosphere und inca)
+
+### Dokumentation
+- README + help.php: alle MQTT Topics vollständig dokumentiert mit Wertebereichen
+
+---
+
+## [0.4.14] – 2026-06-08
+
+### Hinzugefügt
+- `inca/pt_bald` und `inca/pt_bald_name`: Niederschlagstyp des nächsten erwarteten Regens (z.B. "Regen" wenn aktuell trocken aber in 8 min Regen kommt)
+- UI zeigt "kein Niederschlag → Regen in ~8 min" wenn pt_jetzt=255 aber Regen vorhergesagt
+
+### Behoben
+- INCA-UI zeigte "kein Niederschlag" und "Regen in ~8 min" gleichzeitig – war kein Bug, aber verwirrend. Neue UI-Logik erklärt den Zusammenhang.
+
+---
+
+## [0.4.13] – 2026-06-07
+
+### Geändert (Breaking Change – intentional)
+- Alarm-Level-Schema komplett vereinheitlicht: **ZAMG Gelb→1, Orange→2, Rot/Lila→3** für alle 5 Kategorien (Gewitter, Wind, Regen, Hagel, Schnee)
+- `aktiv`-Flag ändert den Level nicht mehr (war früher teilweise +1)
+- INCA und TAWES können auf max. Level 2 anheben (niemals 3)
+- Schnee/Glatteis-Berechnung hatte alten Bug der ZAMG-Stufen (0-4) als Alarm-Level interpretierte
+
+### Dokumentation
+- help.php + README: vollständige Alarm-Berechnungstabellen je Kategorie mit Level-Prinzip-Erklärung
+
+---
+
+## [0.4.12] – 2026-06-07
+
+### Dokumentation
+- help.php: Alarm-Logik, Wind/Regen-Schwellwerte, Quellenübersicht vollständig dokumentiert
+- README: Alle Abschnitte auf aktuellen Stand gebracht
+
+---
+
+## [0.4.11] – 2026-06-07
+
+### Behoben
+- Miniserver-Koordinaten-Abruf über HTTPS (Loxone 14+ erzwingt HTTPS)
+- Alarm-Schwellen: Wind-Level war bei hohem BOEN_ALARM nicht konsistent
+
+---
+
 ## [0.1.5] – 2026-06-05
 
 ### Behoben
