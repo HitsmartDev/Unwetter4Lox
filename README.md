@@ -1,4 +1,4 @@
-# Unwetter4Lox v0.4.17
+# Unwetter4Lox v0.4.18
 
 **LoxBerry-Plugin für automatische Unwettererkennung und Wetterautomatisierung.**
 
@@ -107,7 +107,7 @@ Alle `alarm/`-Topics verwenden **einheitliche Level** mit gleicher Bedeutung üb
 | INCA | Aktuelle Regenrate ≥ **REGEN_ALARM** (`inca/regen_alarm`) | **2** |
 | TAWES | Regenfront upstream, Intensität ≥ **REGEN_ALARM/3**, ETA ≤ 30 min | **2** |
 
-> **TAWES Intensitäts-Gate:** TAWES löst nur einen Alarm aus wenn `tawes/regen_upstream_mm` ≥ REGEN_ALARM/3 (= bei 30 mm/h Standard-Schwelle mindestens 10 mm/h upstream). Leichter Nieselregen (unter diesem Wert) setzt `tawes/regen_upstream=1` (Info), aber keinen Alarm. Ist die Intensität unbekannt (0), wird zur Sicherheit alarmiert.
+> **TAWES Intensitäts-Gate:** TAWES löst nur einen Alarm aus wenn `tawes/regen_upstream_mm` ≥ REGEN_ALARM/3 (= bei 30 mm/h Schwelle mindestens 10 mm/h upstream). Leichter Nieselregen oder veralteter Regen (nur im 2h-Buffer, letzte 30min trocken) setzt `tawes/regen_upstream=1` (Info), aber keinen Alarm.
 
 > `inca/bald_regen` und Regenraten unter REGEN_ALARM werden absichtlich **nicht** für `alarm/regen` verwendet. Wer auf leichten Regen reagieren will (Bewässerung), nimmt `inca/bald_regen` direkt als Trigger in Loxone.
 

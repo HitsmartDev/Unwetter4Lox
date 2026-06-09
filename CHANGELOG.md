@@ -5,6 +5,13 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [0.4.18] – 2026-06-09
+
+### Behoben
+- `alarm/regen` Level 1 feuerte noch immer wenn TAWES `regen_upstream=1` aber `regen_upstream_mm=0`: Der konservative Fallback (`upstream_mm==0 → alarmieren`) war falsch – `upstream_mm=0` bedeutet Regen nur im 2h-Buffer gefunden, letzte 30 min aber trocken. Jetzt: Alarm nur wenn `upstream_mm >= REGEN_ALARM / 3.0` (strikte Bedingung ohne Fallback).
+
+---
+
 ## [0.4.17] – 2026-06-09
 
 ### Behoben

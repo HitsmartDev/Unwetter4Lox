@@ -140,7 +140,7 @@ Mehrere Kategorien: <code>⚡ Gewitter Warnung | 💨 Sturm Warnung</code></td><
 </table>
 
 <p style="margin-top:8px"><b>alarm/regen</b> – <code>inca/bald_regen</code> und Regenraten unter REGEN_ALARM lösen keinen Alarm aus. Für Bewässerungsabschaltung direkt <code>inca/bald_regen</code> in Loxone verwenden.</p>
-<p style="font-size:11px;color:#666"><b>TAWES Intensitäts-Gate:</b> TAWES löst nur einen Alarm aus wenn <code>tawes/regen_upstream_mm</code> ≥ REGEN_ALARM/3. Bei 30 mm/h Schwelle: mind. 10 mm/h upstream nötig. Nieselregen upstream setzt <code>tawes/regen_upstream=1</code> (Info), aber keinen Alarm.</p>
+<p style="font-size:11px;color:#666"><b>TAWES Intensitäts-Gate:</b> TAWES löst nur einen Alarm aus wenn <code>tawes/regen_upstream_mm</code> ≥ REGEN_ALARM/3. Bei 30 mm/h Schwelle: mind. 10 mm/h upstream nötig. Nieselregen oder veralteter Regen (nur im 2h-Buffer, letzte 30 min trocken) setzt <code>tawes/regen_upstream=1</code> (Info), aber keinen Alarm.</p>
 <table class="mqtt-table">
 <thead><tr><th>Quelle</th><th>Bedingung</th><th>→ Level</th></tr></thead>
 <tbody>

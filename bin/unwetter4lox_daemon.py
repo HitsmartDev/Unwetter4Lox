@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Unwetter4Lox Daemon v0.4.17 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
+"""Unwetter4Lox Daemon v0.4.18 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math, re
 from datetime import datetime, timezone, timedelta
 from collections import deque
@@ -755,9 +755,9 @@ def build_alarm(zamg, inca, tawes, akut):
     if tawes.get('regen_upstream'):
         eta = tawes.get('regen_eta_min', -1)
         upstream_mm = float(tawes.get('regen_upstream_mm', 0) or 0)
-        # Nur alarmieren wenn Upstream-Intensität mind. 1/3 der REGEN_ALARM-Schwelle erreicht.
-        # upstream_mm=0 → Intensität unbekannt → konservativ alarmieren.
-        if upstream_mm == 0 or upstream_mm >= REGEN_ALARM / 3.0:
+        # Nur alarmieren wenn Upstream-Intensität die Schwelle erreicht (REGEN_ALARM/3).
+        # upstream_mm=0 → kein aktueller Regen (oder Regen nur im alten Buffer) → kein Alarm.
+        if upstream_mm >= REGEN_ALARM / 3.0:
             regen = max(regen, 2 if 0 <= eta <= 30 else 1)
 
     # Hagel: ZAMG Gelb→1, Orange/höher→2; INCA bald_hagel/graupel→1
@@ -915,7 +915,7 @@ def publish_all(zamg, akut, inca, prev_ids, new_ids, status_msg, tawes=None, pre
 # ---------------------------------------------------------------------------
 def run():
     global _tawes_last_fetch
-    log.info(f'Unwetter4Lox v0.4.17 gestartet | {LAT},{LON} | Lang={LBLANG} | Interval={INTERVAL}s | ZAMG={ZAMG_ENABLED} INCA={INCA_ENABLED} TAWES={TAWES_ENABLED}')
+    log.info(f'Unwetter4Lox v0.4.18 gestartet | {LAT},{LON} | Lang={LBLANG} | Interval={INTERVAL}s | ZAMG={ZAMG_ENABLED} INCA={INCA_ENABLED} TAWES={TAWES_ENABLED}')
     _tawes_last_fetch = 0
     while True:
         try:
