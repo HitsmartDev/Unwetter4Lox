@@ -683,7 +683,7 @@ def publish_tawes(tawes):
     publish('tawes/letztes_update', tawes.get('letztes_update', ''))
     ns = f'{tawes.get("naechste_station_name","–")} ({tawes.get("naechste_station_km",0)}km, {tawes.get("naechste_station_richtung","–")})'
     publish('tawes/naechste_station', ns)
-    publish('notification/tawes', tawes.get('notification', ''))
+    # notification/tawes wird dedupliziert in publish_all() publiziert
 
 # ---------------------------------------------------------------------------
 # Aggregierter Alarm-Status (alle Quellen kombiniert → alarm/ Topics)
@@ -825,9 +825,10 @@ def publish_all(zamg, akut, inca, prev_ids, new_ids, status_msg, tawes=None, pre
         if inca.get('bald_regen'): i_lines.append(L['regen_in'].format(v=m))
         elif inca.get('rr_jetzt', 0) > 0: i_lines.append(L['regen_jetzt'].format(v=inca["rr_jetzt"]))
         if not i_lines: i_lines.append(L['kein_alarm'].format(v=inca.get("fx_jetzt", 0)))
-    n_geo   = '\n'.join(z_lines) if z_lines else L['no_warns']
-    n_inca  = '\n'.join(i_lines) if i_lines else L['no_warns']
-    n_tawes = (tawes or {}).get('notification', '')
+    n_geo       = '\n'.join(z_lines) if z_lines else L['no_warns']
+    n_inca      = '\n'.join(i_lines) if i_lines else L['no_warns']
+    n_tawes_raw = (tawes or {}).get('notification', '')
+    n_tawes     = n_tawes_raw or L['no_warns']  # Fallback wenn keine aktive TAWES-Meldung
 
     # Entwarnung: wenn letzte Runde Warnungen aktiv waren und jetzt keine mehr
     hatte_warn = prev.get('hatte_aktiv', False)
@@ -835,7 +836,8 @@ def publish_all(zamg, akut, inca, prev_ids, new_ids, status_msg, tawes=None, pre
         n_geo = L['entwarnung']
         log.info('ZAMG: Entwarnung – alle Wetterwarnungen aufgehoben')
 
-    n_alle = '\n──\n'.join(filter(None, [n_geo if (z_lines or n_geo == L['entwarnung']) else '', n_inca if i_lines else '', n_tawes])) or n_inca
+    # n_alle: nur aktive Meldungen (kein Fallback-Text aus den Einzelquellen)
+    n_alle = '\n──\n'.join(filter(None, [n_geo if (z_lines or n_geo == L['entwarnung']) else '', n_inca if i_lines else '', n_tawes_raw])) or n_inca
 
     # Notifications nur publizieren wenn sich Inhalt geändert hat (Deduplizierung)
     if n_geo   != prev.get('_n_geo',   ''):  publish('notification/geosphere', n_geo)

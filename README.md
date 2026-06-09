@@ -201,22 +201,23 @@ Alle Topics werden mit `retain=true` publiziert (Loxone bekommt den letzten Wert
 
 **Mögliche Texte für `alarm/zusammenfassung`:**
 
-| Wert | Bedeutung |
+| Wert | Bedingung |
 |:-----|:----------|
 | `✅ Keine Warnungen` | Alle Kategorien = 0 |
 | `⚡ Gewitter möglich` | gewitter = 1 |
-| `⚡ Gewitter AKUT` | gewitter ≥ 2 |
-| `💨 Erhöhte Windgefahr` | wind = 1 |
-| `💨 Sturm aktiv` | wind = 2 |
+| `⚡ Gewitter Warnung` | gewitter = 2 |
+| `⚡ Gewitter EXTREM` | gewitter = 3 |
+| `💨 Wind Vorsicht` | wind = 1 |
+| `💨 Sturm Warnung` | wind = 2 |
 | `💨 Extremsturm` | wind = 3 |
 | `🌧 Regen erwartet` | regen = 1 |
 | `🌧 Starkregen` | regen = 2 |
 | `🌨 Hagelgefahr` | hagel = 1 |
-| `🌨 Hagel AKTIV` | hagel ≥ 2 |
+| `🌨 Hagel Warnung` | hagel = 2 |
 | `❄️ Schnee/Eis möglich` | schnee = 1 |
-| `❄️ Schnee/Eis AKTIV` | schnee ≥ 2 |
+| `❄️ Schnee/Eis Warnung` | schnee = 2 |
 
-Mehrere aktive Kategorien werden mit ` \| ` verbunden, z.B.: `⚡ Gewitter AKUT \| 💨 Sturm aktiv \| 🌧 Starkregen`
+Mehrere aktive Kategorien werden mit ` \| ` verbunden, z.B.: `⚡ Gewitter Warnung \| 💨 Sturm Warnung \| 🌧 Starkregen`
 
 ### GeoSphere Austria Warnungen (zamg/)
 
@@ -252,8 +253,10 @@ Mehrere aktive Kategorien werden mit ` \| ` verbunden, z.B.: `⚡ Gewitter AKUT 
 | `inca/bald_graupel` | Graupel in < 60 min möglich | `0` / `1` |
 | `inca/bald_sturm_30` | Böen ≥ BOEN_ALARM in < 30 min | `0` / `1` |
 | `inca/bald_sturm_60` | Böen ≥ BOEN_ALARM in < 60 min | `0` / `1` |
-| `inca/pt` | Niederschlagstyp Code | `1`=Regen, `2`=Schnee, `4`=Graupel, `5`=Hagel, `255`=kein |
-| `inca/pt_name` | Niederschlagstyp Text | `Regen`, `Schnee`, `Hagel`, `Trocken` |
+| `inca/pt` | Niederschlagstyp jetzt (Code) | `1`=Regen, `2`=Schnee, `3`=Schneeregen, `4`=Graupel, `5`=Hagel, `255`=kein |
+| `inca/pt_name` | Niederschlagstyp jetzt (Text) | `Regen`, `Schnee`, `Schneeregen`, `Graupel`, `Hagel`, `kein Niederschlag` |
+| `inca/pt_bald` | Typ des nächsten Regens (Code) | wie `inca/pt`; `255` wenn kein Regen in Sicht |
+| `inca/pt_bald_name` | Typ des nächsten Regens (Text) | z.B. `Regen`, `Schnee`; leer wenn kein Regen in Sicht |
 
 ### TAWES 360° Stationsdaten (tawes/)
 
@@ -281,14 +284,14 @@ Textmeldungen für Loxone Push-Benachrichtigungen. Werden **nur publiziert wenn 
 
 | Topic | Beschreibung | Beispieltext |
 |:------|:-------------|:-------------|
-| `notification/geosphere` | ZAMG-Warnungen als Klartext ab konfigurierter Mindeststufe. Nur pushen wenn `zamg/irgendwas_aktiv = 1`! | `⚠️ ORANGE – Wind \| heute 14:00 – morgen 06:00 \| Sturmböen` |
-| `notification/inca` | INCA Nowcast-Zusammenfassung | `✅ kein Alarm \| Böen: 12.6 km/h` oder `⚠️ Sturm in 20 min \| Böen bis 75 km/h` |
-| `notification/tawes` | TAWES-Meldung bei aktiver Regenfront oder Sturm upstream | `🌧 Regenfront ~18min \| 62km/h aus W` |
-| `notification/alle` | Alle drei Quellen kombiniert, durch `──` getrennt | Kombination der obigen |
+| `notification/geosphere` | ZAMG-Warnungen als Klartext ab konfigurierter Mindeststufe. | `⚠️ ORANGE – Wind \| heute 14:00 – morgen 06:00 \| Sturmböen` / `keine aktiven Warnungen` |
+| `notification/inca` | INCA Nowcast-Zusammenfassung | `✅ kein Alarm \| Böen: 12.6 km/h` / `⚠️ Sturm in 20 min \| Böen bis 75 km/h` |
+| `notification/tawes` | TAWES-Lagebericht – immer befüllt | `🌧 Regenfront ~18min \| 62km/h aus W` / `keine aktiven Warnungen` |
+| `notification/alle` | Aktive Meldungen aller Quellen, durch `──` getrennt | Nur Quellen mit aktiven Warnungen enthalten |
 
-**Entwarnung** (automatisch nach ZAMG-Warnung): `notification/geosphere` enthält dann `✅ Entwarnung – alle Wetterwarnungen aufgehoben.`
+> Alle drei Einzeltopics sind **immer befüllt** – auch wenn keine Warnung anliegt (`keine aktiven Warnungen` / `✅ kein Alarm | Böen: X km/h`). `notification/alle` enthält dagegen nur Quellen mit echten Meldungen.
 
-**Kein Alarm** (Normalzustand): `notification/inca` und `notification/alle` enthalten `✅ kein Alarm | Böen: X km/h`
+**Entwarnung** (automatisch nach ZAMG-Warnung): `notification/geosphere` enthält `✅ Entwarnung – alle Wetterwarnungen aufgehoben.`
 
 ---
 
@@ -317,7 +320,7 @@ Textmeldungen für Loxone Push-Benachrichtigungen. Werden **nur publiziert wenn 
 | TAWES Stationsradius | 120 km | Suchradius für TAWES-Stationen |
 | Abruf-Intervall | 300 s | Wie oft Daten abgerufen werden |
 | **Böen-Alarmschwelle** | **60 km/h** | **INCA + TAWES Wind-Alarm ab diesem Wert** |
-| **Regen-Alarmschwelle** | **2.0 mm/h** | **INCA Regen-Alarm ab dieser Regenrate** |
+| **Regen-Alarmschwelle** | **10.0 mm/h** | **INCA Regen-Alarm ab dieser Regenrate** |
 | Min. Warnstufe | 1 (Gelb) | Ab welcher ZAMG-Stufe Notification-Text erzeugt wird |
 | MQTT Präfix | `unwetter/` | Präfix für alle MQTT Topics |
 | MQTT Broker | automatisch | Standard: LoxBerry MQTT Gateway |

@@ -193,8 +193,10 @@ Mehrere Kategorien: <code>⚡ Gewitter Warnung | 💨 Sturm Warnung</code></td><
 <tr><td><code>inca/fx_max_60min</code></td><td>km/h</td><td>Max. Böen in der nächsten Stunde</td></tr>
 <tr><td><code>inca/rr</code></td><td>mm/h</td><td>Aktuelle Niederschlagsintensität</td></tr>
 <tr><td><code>inca/regen_alarm</code></td><td>0 / 1</td><td>1 = aktuelle Regenrate ≥ konfigurierter REGEN_ALARM-Schwelle (Standard: 10 mm/h)</td></tr>
-<tr><td><code>inca/pt</code></td><td>1/2/3/4/5/255</td><td>Niederschlagstyp-Code: 1=Regen, 2=Schnee, 3=Schneeregen, 4=Graupel, 5=Hagel, 255=kein</td></tr>
-<tr><td><code>inca/pt_name</code></td><td>Text</td><td>Niederschlagstyp als Text (Sprache je nach Einstellung)</td></tr>
+<tr><td><code>inca/pt</code></td><td>1/2/3/4/5/255</td><td>Niederschlagstyp jetzt (Code): 1=Regen, 2=Schnee, 3=Schneeregen, 4=Graupel, 5=Hagel, 255=kein</td></tr>
+<tr><td><code>inca/pt_name</code></td><td>Text</td><td>Niederschlagstyp jetzt als Text (z.B. "Regen", "kein Niederschlag")</td></tr>
+<tr><td><code>inca/pt_bald</code></td><td>1/2/3/4/5/255</td><td>Niederschlagstyp des nächsten Regens (Code). Gleiche Werte wie <code>inca/pt</code>. 255 = kein Regen in Sicht.</td></tr>
+<tr><td><code>inca/pt_bald_name</code></td><td>Text / leer</td><td>Niederschlagstyp des nächsten Regens als Text. Leer wenn kein Regen erwartet wird.</td></tr>
 <tr><td><code>inca/bald_regen</code></td><td>0 / 1</td><td>1 = Regen kommt in &lt;30 Minuten</td></tr>
 <tr><td><code>inca/bald_hagel</code></td><td>0 / 1</td><td>1 = Hagel möglich in &lt;60 Minuten</td></tr>
 <tr><td><code>inca/bald_graupel</code></td><td>0 / 1</td><td>1 = Graupel möglich in &lt;60 Minuten</td></tr>
@@ -232,23 +234,27 @@ Mehrere Kategorien: <code>⚡ Gewitter Warnung | 💨 Sturm Warnung</code></td><
 
 <div data-role="collapsible" data-collapsed="true">
 <h4>🔔 notification/ – Fertige Push-Texte</h4>
-<p>Werden <b>nur bei Änderung</b> publiziert (kein Spam). Immer zusammen mit einem Gate-Topic prüfen, z.B. <code>alarm/gesamt &gt; 0</code> oder <code>zamg/irgendwas_aktiv = 1</code>.</p>
+<p>Werden <b>nur bei Änderung</b> publiziert (kein Spam). Die <b>Einzeltopics</b> haben immer Inhalt – auch wenn keine Warnung aktiv ist (Fallback-Text). <code>notification/alle</code> enthält nur aktive Meldungen und eignet sich am besten für Loxone Push.</p>
 <table class="mqtt-table">
 <thead><tr><th>Topic</th><th>Bedeutung</th><th>Beispielwerte</th></tr></thead>
 <tbody>
-<tr><td><code>notification/geosphere</code></td><td>ZAMG-Warnungen ab konfigurierter Mindeststufe</td><td>
+<tr><td><code>notification/geosphere</code></td><td>ZAMG-Warnungen ab konfigurierter Mindeststufe. <b>Immer befüllt.</b></td><td>
 <code>⚠️ ORANGE – Wind | heute 14:00 – morgen 06:00</code><br>
 <code>keine aktiven Warnungen</code> (kein Alarm)<br>
 <code>✅ Entwarnung – alle Wetterwarnungen aufgehoben.</code> (nach Ende)</td></tr>
-<tr><td><code>notification/inca</code></td><td>INCA Nowcast-Lage</td><td>
+<tr><td><code>notification/inca</code></td><td>INCA Nowcast-Lage. <b>Immer befüllt.</b></td><td>
 <code>✅ kein Alarm | Böen: 12.6 km/h</code> (normal)<br>
-<code>⚠️ Sturm in 20 min | Böen bis 75 km/h</code></td></tr>
-<tr><td><code>notification/tawes</code></td><td>TAWES-Meldung bei Regenfront oder Sturm upstream (leer wenn ruhig)</td><td>
-<code>🌧 Regenfront ~18min | 62km/h aus W</code><br>
-<code>⚡ Gewitter-Signal | Druckabfall + hohe Feuchte</code></td></tr>
-<tr><td><code>notification/alle</code></td><td>Alle aktiven Meldungen kombiniert (durch ── getrennt) – Empfehlung für den Loxone Push</td><td>
-<code>✅ kein Alarm | Böen: 12.6 km/h</code> (ruhig)<br>
-<code>⚠️ ORANGE – Wind | ... ── ⚠️ Sturm in 20 min</code></td></tr>
+<code>🟠 Sturmböen &lt;30 min: max 75 km/h</code><br>
+<code>🌧️ Regen in ~8 min</code></td></tr>
+<tr><td><code>notification/tawes</code></td><td>TAWES-Lagebericht. <b>Immer befüllt.</b></td><td>
+<code>keine aktiven Warnungen</code> (ruhig)<br>
+<code>💨 Sturmböen upstream 85 km/h</code><br>
+<code>🌧️ Regenfront ~18min | 62km/h aus W | 78% Konfidenz</code><br>
+<code>⚡ Gewittergefahr | Druck 1.2 hPa/10min + 89% Feuchte</code><br>
+<code>🔴 AKUTE GEWITTERGEFAHR | Druck … + Böenzunahme</code></td></tr>
+<tr><td><code>notification/alle</code></td><td>Alle <b>aktiven</b> Meldungen kombiniert (durch ── getrennt). Kein Fallback-Text. – <b>Empfehlung für Loxone Push</b></td><td>
+<code>✅ kein Alarm | Böen: 12.6 km/h</code> (nur INCA, wenn sonst ruhig)<br>
+<code>⚠️ ORANGE – Wind | ... ── 🟠 Sturmböen &lt;30 min ── 💨 Sturmböen upstream</code></td></tr>
 </tbody>
 </table>
 </div>
