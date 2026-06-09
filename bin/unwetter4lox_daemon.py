@@ -324,9 +324,10 @@ def fetch_inca():
 # ---------------------------------------------------------------------------
 # TAWES 360° Stationsnetz & Korrelation
 # ---------------------------------------------------------------------------
-_tawes_all_stations = []  # In-Memory Cache der Stationsliste
-TAWES_BUFFER = {}          # station_id → deque(maxlen=12) [12×10min = 2h]
-_tawes_last_fetch = 0      # Timestamp letzter Messdaten-Abruf
+_tawes_all_stations = []       # In-Memory Cache der Stationsliste
+_tawes_startup_fresh_done = False  # Beim ersten Start immer frisch von API laden (ignoriert Cache)
+TAWES_BUFFER = {}              # station_id → deque(maxlen=12) [12×10min = 2h]
+_tawes_last_fetch = 0          # Timestamp letzter Messdaten-Abruf
 
 def _haversine(lat1, lon1, lat2, lon2):
     R = 6371; dlat = math.radians(lat2 - lat1); dlon = math.radians(lon2 - lon1)
@@ -367,13 +368,22 @@ def _canon_sid(x):
     return s
 
 def load_tawes_stations():
-    """Stationsliste laden. Täglich von API, sonst aus TAWES_CACHE_FILE."""
-    global _tawes_all_stations
+    """Stationsliste laden. Beim ersten Daemon-Start immer frisch von API (verhindert Stale-Cache
+    nach Plugin-Update), danach täglich erneuert, sonst aus TAWES_CACHE_FILE."""
+    global _tawes_all_stations, _tawes_startup_fresh_done
     cache_age = time.time() - os.path.getmtime(TAWES_CACHE_FILE) if os.path.exists(TAWES_CACHE_FILE) else 999999
-    if _tawes_all_stations and cache_age < 86400:
+
+    # In-Memory Cache nutzen: nur wenn Startup-Fetch bereits erfolgt und Cache frisch
+    if _tawes_all_stations and _tawes_startup_fresh_done and cache_age < 86400:
         return _tawes_all_stations
-    # Aus Datei-Cache laden – IDs beim Laden kanonisieren (repariert alte Cache-Files mit falschen Formaten)
-    if os.path.exists(TAWES_CACHE_FILE) and cache_age < 86400:
+
+    # Erster Aufruf nach Daemon-Start → Cache-File ignorieren, direkt API abrufen
+    # (verhindert Timing-Race zwischen postinstall.sh und Daemon-Start bei Updates)
+    if not _tawes_startup_fresh_done:
+        _tawes_startup_fresh_done = True
+        log.info('TAWES: Daemon-Start – Station-Cache ignoriert, frischer API-Abruf...')
+    # Nach Startup-Fetch: Datei-Cache nutzen wenn aktuell
+    elif os.path.exists(TAWES_CACHE_FILE) and cache_age < 86400:
         try:
             with open(TAWES_CACHE_FILE, 'r', encoding='utf-8') as f:
                 loaded = json.load(f)
@@ -577,6 +587,17 @@ def correlate_tawes():
                 regen_upstream = 1
                 break
 
+    # Max-Regenintensität upstream (mm/h) – für Alarm-Schwelle in build_alarm
+    regen_upstream_mm = 0.0
+    if regen_upstream:
+        for sid in regen_start:
+            buf = list(TAWES_BUFFER.get(sid, []))
+            recent = buf[-3:] if len(buf) >= 3 else buf  # max. letzten 30 min
+            max_rr = max((b.get('RR') or 0 for b in recent), default=0)
+            if max_rr > regen_upstream_mm:
+                regen_upstream_mm = max_rr
+        regen_upstream_mm = round(regen_upstream_mm, 1)
+
     upstream_mit_regen = sorted([st for st in upstream_list if st['id'] in regen_start],
                                  key=lambda x: x['dist_km'], reverse=True)
     if len(upstream_mit_regen) >= 2:
@@ -667,6 +688,7 @@ def correlate_tawes():
         'wind_trend':                  wind_trend,
         'sturm_upstream':              sturm_upstream,
         'regen_upstream':              regen_upstream,
+        'regen_upstream_mm':           regen_upstream_mm,
         'regen_eta_min':               regen_eta_min,
         'regen_konfidenz':             konfidenz,
         'front_speed_kmh':             front_speed_kmh,
@@ -684,8 +706,8 @@ def publish_tawes(tawes):
     """TAWES MQTT Topics publizieren."""
     if not tawes: return
     for k in ['dominante_windrichtung','dominante_windrichtung_name','wind_upstream_kmh',
-              'wind_trend','sturm_upstream','regen_upstream','regen_eta_min','regen_konfidenz',
-              'front_speed_kmh','druck_trend','gewitter_signal','upstream_aktiv']:
+              'wind_trend','sturm_upstream','regen_upstream','regen_upstream_mm','regen_eta_min',
+              'regen_konfidenz','front_speed_kmh','druck_trend','gewitter_signal','upstream_aktiv']:
         publish(f'tawes/{k}', tawes.get(k, 0))
     publish('tawes/stationen_anzahl', len(tawes.get('alle_stationen', [])))
     publish('tawes/letztes_update', tawes.get('letztes_update', ''))
@@ -731,7 +753,11 @@ def build_alarm(zamg, inca, tawes, akut):
     if inca.get('regen_alarm'):  regen = max(regen, 2)  # Aktuelle Rate >= REGEN_ALARM mm/h
     if tawes.get('regen_upstream'):
         eta = tawes.get('regen_eta_min', -1)
-        regen = max(regen, 2 if 0 <= eta <= 30 else 1)
+        upstream_mm = float(tawes.get('regen_upstream_mm', 0) or 0)
+        # Nur alarmieren wenn Upstream-Intensität mind. 1/3 der REGEN_ALARM-Schwelle erreicht.
+        # upstream_mm=0 → Intensität unbekannt → konservativ alarmieren.
+        if upstream_mm == 0 or upstream_mm >= REGEN_ALARM / 3.0:
+            regen = max(regen, 2 if 0 <= eta <= 30 else 1)
 
     # Hagel: ZAMG Gelb→1, Orange/höher→2; INCA bald_hagel/graupel→1
     h_stufe = zamg.get('hagel', {}).get('stufe', 0)
