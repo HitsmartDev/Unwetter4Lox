@@ -57,69 +57,110 @@ Das Plugin sucht alle TAWES-Stationen im einstellbaren Umkreis und wertet deren 
 
 ## Alarmstufen verstehen
 
-Alle `alarm/`-Topics verwenden einheitliche Stufen:
+Die `alarm/`-Topics kombinieren alle drei Datenquellen zu **einheitlichen Stufen**:
 
-| Wert | Bedeutung | Farbe |
-|:----:|:----------|:------|
-| `0` | Keine Gefahr | Grün |
-| `1` | Möglich / Vorsicht | Gelb |
-| `2` | Aktiv / Warnung | Orange |
-| `3` | AKUT / Extrem | Rot |
+| Wert | Bedeutung | Typischer Auslöser |
+|:----:|:----------|:-------------------|
+| `0` | Keine Gefahr | Alles ruhig |
+| `1` | Möglich / Vorsicht | Warnung in Sicht oder Messwerte nähern sich Schwelle |
+| `2` | Aktiv / Warnung | Warnung läuft, Schwelle überschritten |
+| `3` | AKUT / Extrem | Extreme ZAMG-Warnung (Rot/Lila) aktiv |
 
-### Wie werden Alarmstufen berechnet?
+`alarm/gesamt` = `max(gewitter, wind, regen, hagel, schnee)` – der höchste Einzelwert aller Kategorien in einer Zahl. Ideal als einziger Gate-Wert in Loxone-Automatisierungen.
 
-Jede Kategorie aggregiert mehrere Quellen. Beispiel für **Wind**:
+---
 
-| Quelle | Bedingung | → Alarmstufe |
-|:-------|:----------|:------------|
-| ZAMG | Windwarnung Stufe 1–4 | 1–3 |
+## Wie werden die alarm/ Topics berechnet?
+
+Jede Kategorie kombiniert mehrere Quellen. **Wichtig:** INCA und TAWES feuern nur bei konfigurierten Schwellwerten – nicht bei jedem Nieselregen oder leichter Brise.
+
+### alarm/gewitter
+
+| Quelle | Bedingung | → Level |
+|:-------|:----------|:--------|
+| ZAMG | Gewitter-Warnung Stufe 1 (Gelb) | 1 |
+| TAWES | Gewittersignal Level 1 (Druckabfall + hohe Feuchte) | 1 |
+| ZAMG | Gewitter-Warnung aktiv (läuft gerade) | 2 |
+| TAWES | Gewittersignal Level 2 (+ starke Böenzunahme) | 2 |
+| System | Behördliche Akutwarnung (GWA) | ≥ 2 |
+
+### alarm/wind
+
+| Quelle | Bedingung | → Level |
+|:-------|:----------|:--------|
 | INCA | Böen ≥ **BOEN_ALARM** in < 60 min | 1 |
-| INCA | Böen ≥ **BOEN_ALARM** in < 30 min | 2 |
 | TAWES | Upstream-Böen ≥ **BOEN_ALARM** | 1 |
+| ZAMG | Wind-Warnung Stufe 2 Orange (nicht aktiv) | 1 |
+| INCA | Böen ≥ **BOEN_ALARM** in < 30 min | 2 |
 | TAWES | Upstream-Böen ≥ **2 × BOEN_ALARM** | 2 |
+| ZAMG | Wind-Warnung Stufe 2 Orange **aktiv** | 2 |
+| ZAMG | Wind-Warnung Stufe 3 Rot **aktiv** | 3 |
+| ZAMG | Wind-Warnung Stufe 4 Lila | 3 |
 
-Beispiel für **Regen**:
+> **Hinweis:** ZAMG Stufe 1 Gelb wird für Wind **ignoriert** – liegt typisch unter der konfigurierten BOEN_ALARM-Schwelle und würde auch ohne echte Gefahr dauerhaft feuern.
 
-| Quelle | Bedingung | → Alarmstufe |
-|:-------|:----------|:------------|
-| ZAMG | Regenwarnung | 1–2 |
-| INCA | Regen erwartet / > 0.1 mm/h | 1 |
-| INCA | Aktuelle Regenrate ≥ **REGEN_ALARM** | 2 |
-| TAWES | Regenfront > 30 min entfernt | 1 |
-| TAWES | Regenfront < 30 min entfernt | 2 |
+### alarm/regen
+
+| Quelle | Bedingung | → Level |
+|:-------|:----------|:--------|
+| ZAMG | Regen-Warnung Stufe 1 (Gelb) | 1 |
+| TAWES | Regenfront upstream, ETA > 30 min | 1 |
+| ZAMG | Regen-Warnung aktiv (läuft gerade) | 2 |
+| INCA | Regenrate ≥ **REGEN_ALARM** (`inca/regen_alarm = 1`) | 2 |
+| TAWES | Regenfront upstream, ETA ≤ 30 min | 2 |
+
+> **Hinweis:** `inca/bald_regen` und Regenrate < REGEN_ALARM werden **nicht** für `alarm/regen` verwendet – zu sensibel für Nieselregen. Für Bewässerungsabschaltung bei jedem Tropfen: `inca/bald_regen` direkt in Loxone verwenden.
+
+### alarm/hagel
+
+| Quelle | Bedingung | → Level |
+|:-------|:----------|:--------|
+| ZAMG | Hagel-Warnung Stufe 1 | 1 |
+| INCA | Hagel möglich in < 60 min (`bald_hagel`) | 1 |
+| INCA | Graupel möglich in < 60 min (`bald_graupel`) | 1 |
+| ZAMG | Hagel-Warnung aktiv | 2 |
+
+### alarm/schnee
+
+| Quelle | Bedingung | → Level |
+|:-------|:----------|:--------|
+| ZAMG | Schnee- oder Glatteis-Warnung Stufe 1 | 1 |
+| INCA | Niederschlagstyp = Schnee (PT=2) oder Schneeregen (PT=3) | 1 |
+| ZAMG | Schnee- oder Glatteis-Warnung aktiv | 2 |
 
 ---
 
 ## Konfigurierbare Schwellwerte
 
-Zwei Schwellwerte in den Einstellungen bestimmen, ab wann Alarme ausgelöst werden:
+Zwei Schwellwerte in den Einstellungen bestimmen, ab wann INCA und TAWES einen Alarm auslösen:
 
 ### Böen-Alarmschwelle (`BOEN_ALARM`)
 
 **Standard: 60 km/h** (= Beaufort 8, Sturmböen)
 
-Dieser Wert wird an **drei Stellen** verwendet:
-1. **INCA `bald_sturm_*` Flags** – Werden gesetzt wenn Böen ≥ Schwelle vorhergesagt sind
-2. **TAWES `sturm_upstream` Flag** – Gesetzt wenn Upstream-Böen ≥ Schwelle
-3. **`alarm/wind` Level 1** – Wenn TAWES Upstream-Böen ≥ Schwelle
-4. **`alarm/wind` Level 2** – Wenn TAWES Upstream-Böen ≥ 2× Schwelle
+Wirkt an vier Stellen gleichzeitig:
+1. `inca/bald_sturm_30` / `bald_sturm_60` – gesetzt wenn Böen ≥ Schwelle vorhergesagt
+2. `tawes/sturm_upstream` – gesetzt wenn Upstream-Böen ≥ Schwelle
+3. `alarm/wind` Level 1 – wenn INCA ≥ Schwelle in 60 min oder TAWES ≥ Schwelle
+4. `alarm/wind` Level 2 – wenn INCA ≥ Schwelle in 30 min oder TAWES ≥ 2× Schwelle
 
 Empfehlungen:
-- `40 km/h` – Empfindlich, auch für leichte Automatisierungen (Markisen ab Beaufort 6)
-- `60 km/h` – Standard für Unwetterschutz
+- `40 km/h` – Empfindlich (Markisen ab Beaufort 6, Beaufort 6 = ~45 km/h)
+- `60 km/h` – Standard für Unwetterschutz (Beaufort 8)
 - `80 km/h` – Nur bei wirklich starkem Sturm (Beaufort 9+)
 
 ### Regen-Alarmschwelle (`REGEN_ALARM`)
 
-**Standard: 2.0 mm/h** (leichter Regen)
+**Standard: 10.0 mm/h** (starker Regen)
 
-Dieser Wert bestimmt ab welcher **aktuellen Regenrate** `inca/regen_alarm = 1` gesetzt wird und `alarm/regen` auf Level 2 springt.
+Wirkt an zwei Stellen gleichzeitig:
+1. `inca/regen_alarm = 1` – wenn aktuelle Regenrate ≥ Schwelle
+2. `alarm/regen` Level 2 – wenn `regen_alarm = 1`
 
 Empfehlungen:
-- `0.5 mm/h` – Schon bei Nieselregen (für Bewässerungsabschaltung)
-- `2.0 mm/h` – Standard, deutlich spürbarer Regen
-- `10.0 mm/h` – Nur bei starkem Regen
-- `20.0 mm/h` – Nur bei Starkregen (Überflutungsgefahr)
+- `2.0 mm/h` – Deutlich spürbarer Regen (für Bewässerungsabschaltung via `alarm/regen`)
+- `10.0 mm/h` – Starkregen (Standard)
+- `20.0 mm/h` – Nur bei Starkregen mit Überflutungsgefahr
 
 ---
 
