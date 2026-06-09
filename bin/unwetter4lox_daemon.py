@@ -637,19 +637,27 @@ def correlate_tawes():
     ns_km   = naechste_upstream['dist_km'] if naechste_upstream else 0
     ns_richt = naechste_upstream['bearing_name'] if naechste_upstream else '–'
 
-    # Notification
+    # Hilfsfunktion: Wert auf nächstes Vielfaches von n runden (verhindert Dedup-Bypass durch Kleinstschwankungen)
+    def _rnd(v, n): return round(float(v) / n) * n
+
+    # Notification – gerundete Werte damit sich der Text nicht bei jeder Kleinstschwankung ändert
     notif = ''
     if gewitter_signal:
         rf_val = (naechste_upstream or {}).get('RF', 0) or 0
         prefix = '🔴 AKUTE GEWITTERGEFAHR' if gewitter_signal == 2 else '⚡ Gewittergefahr'
         notif = f'{prefix} | Druck {abs(druck_trend):.1f} hPa/10min + {rf_val:.0f}% Feuchte'
     elif sturm_upstream:
-        trend_str = f' | Trend +{wind_trend} km/h/10min' if wind_trend > 0 else ''
-        notif = f'💨 Sturmböen upstream {wind_upstream_kmh} km/h{trend_str}'
-    elif regen_upstream and regen_eta_min >= 0:
-        notif = f'🌧️ Regenfront ~{regen_eta_min}min | {front_speed_kmh}km/h aus {dominante_wr_name} | {konfidenz}% Konfidenz'
-    elif regen_upstream:
-        notif = f'🌧️ Regen bei {ns_name} ({ns_km}km) | Wind {dominante_wr_name} | Ankunft unbekannt'
+        # Ort + gerundeter Windwert – klar dass es eine Upstream-Station ist, nicht der lokale Wind
+        trend_str = f' | steigend' if wind_trend > 0 else ''
+        wind_r = _rnd(wind_upstream_kmh, 5)
+        notif = f'💨 Sturmböen {ns_name} ({ns_km}km): {wind_r} km/h{trend_str}'
+    elif regen_upstream and konfidenz >= 50:
+        # ETA auf 5 min runden – verhindert Notification-Spam durch Countdown
+        if regen_eta_min >= 0:
+            eta_r = _rnd(regen_eta_min, 5)
+            notif = f'🌧️ Regenfront ~{eta_r}min | {_rnd(front_speed_kmh, 5)}km/h aus {dominante_wr_name} | {konfidenz}% Konfidenz'
+        else:
+            notif = f'🌧️ Regen bei {ns_name} ({ns_km}km) | aus {dominante_wr_name} | Ankunft unbekannt'
 
     return {
         'letztes_update':              datetime.now().astimezone().strftime('%d.%m.%Y %H:%M:%S'),
@@ -815,16 +823,26 @@ def publish_all(zamg, akut, inca, prev_ids, new_ids, status_msg, tawes=None, pre
         publish('inca/regen_alarm', inca.get('regen_alarm', 0))
     z_lines = [zamg[t]['notification'] for t in all_types if zamg.get(t,{}).get('stufe',0) >= MIN_STUFE and zamg[t]['notification']]
     if akut: z_lines.insert(0, L['akut_active'])
+    def _rnd_n(v, n): return round(float(v or 0) / n) * n  # Hilfsfunktion zum Runden
+
     i_lines = []
     if inca:
         if inca.get('bald_hagel'): i_lines.append(L['hagel_60'])
         elif inca.get('bald_graupel'): i_lines.append(L['graupel_60'])
-        if inca.get('bald_sturm_30'): i_lines.append(L['sturm_30'].format(v=inca["fx_max_30min"]))
-        elif inca.get('bald_sturm_60'): i_lines.append(L['sturm_60'].format(v=inca["fx_max_60min"]))
+        # Wind: auf 5 km/h runden – sonst ändert sich der Text bei jeder Kleinstschwankung
+        if inca.get('bald_sturm_30'):
+            i_lines.append(L['sturm_30'].format(v=_rnd_n(inca["fx_max_30min"], 5)))
+        elif inca.get('bald_sturm_60'):
+            i_lines.append(L['sturm_60'].format(v=_rnd_n(inca["fx_max_60min"], 5)))
+        # Regen: bald_regen nur in Notification wenn REGEN_ALARM-Schwelle niedrig (≤ 2mm/h)
+        # oder wenn aktuell schon Regen >= Schwelle fällt. Verhindert Spam bei hoher Schwelle.
         m = inca.get('minuten_bis_regen', -1)
-        if inca.get('bald_regen'): i_lines.append(L['regen_in'].format(v=m))
-        elif inca.get('rr_jetzt', 0) > 0: i_lines.append(L['regen_jetzt'].format(v=inca["rr_jetzt"]))
-        if not i_lines: i_lines.append(L['kein_alarm'].format(v=inca.get("fx_jetzt", 0)))
+        m_r = _rnd_n(m, 5) if m >= 0 else -1  # ETA auf 5 min runden
+        if inca.get('bald_regen') and (inca.get('regen_alarm') or REGEN_ALARM <= 2.0):
+            i_lines.append(L['regen_in'].format(v=m_r))
+        elif inca.get('rr_jetzt', 0) > 0:
+            i_lines.append(L['regen_jetzt'].format(v=inca["rr_jetzt"]))
+        if not i_lines: i_lines.append(L['kein_alarm'].format(v=_rnd_n(inca.get("fx_jetzt", 0), 1)))
     n_geo       = '\n'.join(z_lines) if z_lines else L['no_warns']
     n_inca      = '\n'.join(i_lines) if i_lines else L['no_warns']
     n_tawes_raw = (tawes or {}).get('notification', '')
