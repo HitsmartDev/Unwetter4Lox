@@ -249,13 +249,24 @@ $header_tc = $any_alarm == 1 ? '#333' : 'white';
     <b>Max Böen 60 min</b> – höchste Böe in der nächsten Stunde
 </li>
 <li data-icon="false"><span class="ui-li-count"><?= number_format($inca['rr_jetzt'] ?? 0,2) ?> mm/h</span><b>Niederschlag jetzt</b> – Intensität aktuell</li>
-<li data-icon="false"><span class="ui-li-count"><?= htmlspecialchars($inca['pt_name'] ?? '–') ?></span><b>Niederschlagstyp</b> – Regen / Schnee / Hagel / …</li>
-<?php $mbr = $inca['minuten_bis_regen'] ?? -1; ?>
+<?php
+$pt_jetzt = (int)($inca['pt_jetzt'] ?? 255);
+$pt_name  = htmlspecialchars($inca['pt_name'] ?? '–');
+$pt_bald_name = htmlspecialchars($inca['pt_bald_name'] ?? '');
+$mbr = $inca['minuten_bis_regen'] ?? -1;
+// Wenn aktuell kein Niederschlag aber Regen prognostiziert: Folgetyp anzeigen
+if ($pt_jetzt === 255 && $mbr >= 0 && $pt_bald_name !== '') {
+    $pt_display = "kein Niederschlag → {$pt_bald_name} in ~{$mbr} min";
+} else {
+    $pt_display = $pt_name;
+}
+?>
+<li data-icon="false"><span class="ui-li-count"><?= $pt_display ?></span><b>Niederschlagstyp</b> – aktuell / bald erwartet</li>
 <li data-icon="false">
     <span class="ui-li-count" style="<?= $mbr >= 0 && $mbr <= 15 ? 'color:#f44336' : '' ?>">
         <?= $mbr >= 0 ? "~{$mbr} min" : '☀️ trocken' ?>
     </span>
-    <b>Regen kommt in</b> – Zeit bis zum nächsten Niederschlag (-1 = keiner in Sicht)
+    <b>Regen kommt in</b> – Zeit bis zum nächsten Niederschlag
 </li>
 </ul>
 </div>

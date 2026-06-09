@@ -280,7 +280,7 @@ def fetch_zamg():
 # ---------------------------------------------------------------------------
 def fetch_inca():
     if not INCA_ENABLED: return {}
-    now, res = datetime.now(tz=timezone.utc), dict(ff_jetzt=0.0, fx_jetzt=0.0, fx_max_30min=0.0, fx_max_60min=0.0, rr_jetzt=0.0, pt_jetzt=255, pt_name=L['pt_none'], bald_regen=0, bald_hagel=0, bald_graupel=0, bald_sturm_30=0, bald_sturm_60=0, minuten_bis_regen=-1)
+    now, res = datetime.now(tz=timezone.utc), dict(ff_jetzt=0.0, fx_jetzt=0.0, fx_max_30min=0.0, fx_max_60min=0.0, rr_jetzt=0.0, pt_jetzt=255, pt_name=L['pt_none'], pt_bald=255, pt_bald_name='', bald_regen=0, bald_hagel=0, bald_graupel=0, bald_sturm_30=0, bald_sturm_60=0, minuten_bis_regen=-1)
     for param in ['ff', 'fx', 'rr', 'pt']:
         url = f'https://dataset.api.hub.geosphere.at/v1/timeseries/forecast/nowcast-v1-15min-1km?lat_lon={LAT}%2C{LON}&parameters={param}&output_format=geojson'
         data = fetch_json(url, f'INCA {param}')
@@ -304,10 +304,17 @@ def fetch_inca():
             for i, ts in enumerate(ts_list):
                 if i < len(serie) and serie[i] > 0.0:
                     t = datetime.fromisoformat(ts).timestamp()
-                    res['minuten_bis_regen'], res['bald_regen'] = max(0, int((t - now.timestamp()) / 60)), int(t <= now.timestamp()+1800); break
+                    res['minuten_bis_regen'], res['bald_regen'] = max(0, int((t - now.timestamp()) / 60)), int(t <= now.timestamp()+1800)
+                    res['_regen_idx'] = i  # Index für pt_bald-Lookup merken
+                    break
         elif param == 'pt':
             serie = [int(v) if v else 255 for v in values]; res['pt_jetzt'] = serie[0] if serie else 255
             res['pt_name'] = PT_NAME.get(res['pt_jetzt'], 'unbekannt')
+            # Niederschlagstyp des nächsten Regeneintreffens (pt_bald)
+            ri = res.get('_regen_idx', -1)
+            if ri >= 0 and ri < len(serie) and serie[ri] not in (255, None):
+                res['pt_bald'] = serie[ri]
+                res['pt_bald_name'] = PT_NAME.get(serie[ri], 'Regen')
             for i, ts in enumerate(ts_list):
                 if i < len(serie) and datetime.fromisoformat(ts).timestamp() <= now.timestamp()+3600:
                     if serie[i] == 5: res['bald_hagel'] = 1
@@ -803,7 +810,7 @@ def publish_all(zamg, akut, inca, prev_ids, new_ids, status_msg, tawes=None, pre
     irgendwas = int(any(zamg.get(t, {}).get('aktiv', 0) or zamg.get(t, {}).get('bald', 0) for t in all_types) or akut)
     publish('zamg/max_stufe', max_stufe); publish('zamg/irgendwas_aktiv', irgendwas)
     if inca:
-        for k in ['fx_jetzt','ff_jetzt','fx_max_30min','fx_max_60min','rr_jetzt','pt_jetzt','pt_name','bald_regen','bald_hagel','bald_graupel','bald_sturm_30','bald_sturm_60','minuten_bis_regen']:
+        for k in ['fx_jetzt','ff_jetzt','fx_max_30min','fx_max_60min','rr_jetzt','pt_jetzt','pt_name','pt_bald','pt_bald_name','bald_regen','bald_hagel','bald_graupel','bald_sturm_30','bald_sturm_60','minuten_bis_regen']:
             publish(f'inca/{k.replace("_jetzt","") if "jetzt" in k else k}', inca.get(k, 0))
         publish('inca/regen_alarm', inca.get('regen_alarm', 0))
     z_lines = [zamg[t]['notification'] for t in all_types if zamg.get(t,{}).get('stufe',0) >= MIN_STUFE and zamg[t]['notification']]
