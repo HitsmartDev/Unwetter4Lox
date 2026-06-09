@@ -693,21 +693,26 @@ def build_alarm(zamg, inca, tawes, akut):
     gewitter = max(gewitter, tawes_g)
     if akut: gewitter = max(gewitter, 2)
 
-    # Wind – kombiniert ZAMG, INCA, TAWES Upstream-Böen (vs. BOEN_ALARM-Schwelle)
-    wind = zamg.get('wind', {}).get('stufe', 0)
-    if wind > 0 and zamg.get('wind', {}).get('aktiv', 0): wind = min(3, wind + 1)
-    if inca.get('bald_sturm_30'): wind = max(wind, 2)
-    elif inca.get('bald_sturm_60'): wind = max(wind, 1)
+    # Wind – INCA/TAWES nur bei >= BOEN_ALARM; ZAMG nur ab Stufe 2 (Orange) als Level 1
+    # Begründung: ZAMG Stufe 1 (Gelb) oft unterhalb der konfigurierten BOEN_ALARM-Schwelle
+    zamg_wind_stufe = zamg.get('wind', {}).get('stufe', 0)
+    if zamg_wind_stufe >= 2:
+        wind = zamg_wind_stufe - 1          # ZAMG Orange (2) → alarm 1, Rot (3) → 2, Lila (4) → 3
+        if zamg.get('wind', {}).get('aktiv', 0): wind = min(3, wind + 1)
+    else:
+        wind = 0                            # ZAMG Gelb (1) wird ignoriert – liegt oft < BOEN_ALARM
+    if inca.get('bald_sturm_30'):   wind = max(wind, 2)  # INCA >= BOEN_ALARM in 30min
+    elif inca.get('bald_sturm_60'): wind = max(wind, 1)  # INCA >= BOEN_ALARM in 60min
     tawes_wind = float(tawes.get('wind_upstream_kmh', 0) or 0)
-    if tawes_wind >= BOEN_ALARM * 2.0: wind = max(wind, 2)   # doppelte Schwelle = akuter Sturm
-    elif tawes_wind >= BOEN_ALARM:     wind = max(wind, 1)   # Schwelle = Warnstufe
+    if tawes_wind >= BOEN_ALARM * 2.0: wind = max(wind, 2)
+    elif tawes_wind >= BOEN_ALARM:     wind = max(wind, 1)
 
-    # Regen – kombiniert ZAMG, INCA Nowcast (vs. REGEN_ALARM-Schwelle), TAWES Regenfront
+    # Regen – nur bei konfigurierten Schwellen (REGEN_ALARM) oder echter Regenfront (TAWES)
+    # bald_regen (Nieselregen) und rr < REGEN_ALARM intentional weggelassen – zu sensibel
     regen = 0
     if zamg.get('regen', {}).get('stufe', 0) >= 1: regen = 1
     if zamg.get('regen', {}).get('aktiv', 0):      regen = 2
-    if inca.get('regen_alarm'):                     regen = max(regen, 2)   # >= REGEN_ALARM mm/h
-    elif inca.get('bald_regen') or inca.get('rr_jetzt', 0) > 0.1: regen = max(regen, 1)
+    if inca.get('regen_alarm'):                     regen = max(regen, 2)  # >= REGEN_ALARM mm/h
     if tawes.get('regen_upstream'):
         eta = tawes.get('regen_eta_min', -1)
         regen = max(regen, 2 if 0 <= eta <= 30 else 1)

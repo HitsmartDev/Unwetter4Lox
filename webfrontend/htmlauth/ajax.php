@@ -65,25 +65,39 @@ if ($action === 'get_miniserver_coords') {
         exit;
     }
 
-    # LoxApp3.json: Enthält msInfo.location ("Lage"-Feld aus Loxone Config → Miniserver → Eigenschaften)
-    # sowie ggf. direkte GPS-Koordinaten (latitude/longitude) in neueren Firmware-Versionen.
-    # Range-Request: nur die ersten 16 KB lesen – msInfo steht immer am Dateianfang.
+    # LoxApp3.json: Enthält msInfo.location und ggf. GPS-Koordinaten (neuere Firmware).
+    # Range-Request: erste 16 KB reichen – msInfo steht immer am Dateianfang.
+    # HTTPS-Erkennung: UseSSL/Https-Flag aus LoxBerry config, oder Port 443.
+    # Fallback: wenn primäres Schema scheitert, wird das andere versucht (HTTP ↔ HTTPS).
     $location_str = '';
     $api_source   = '';
 
-    $lox_url = "http://{$ip}:{$port}/data/LoxApp3.json";
-    $lox_ctx = stream_context_create(['http' => [
-        'header'        => "Authorization: Basic " . base64_encode("{$user}:{$pass}") . "\r\n"
-                         . "Range: bytes=0-16383\r\n",
-        'timeout'       => 8,
-        'ignore_errors' => true,
-    ]]);
-    # fopen + fread begrenzt den Transfer auf 16 KB, auch wenn der Server Range nicht unterstützt
-    $lox_handle = @fopen($lox_url, 'r', false, $lox_ctx);
+    $use_ssl = !empty($ms['UseSSL']) || !empty($ms['usessl']) ||
+               !empty($ms['Https'])  || !empty($ms['https'])  ||
+               (string)$port === '443';
+    $schemes = $use_ssl ? ['https', 'http'] : ['http', 'https'];
+
     $lox_raw = '';
-    if ($lox_handle) {
-        $lox_raw = fread($lox_handle, 16384);
-        fclose($lox_handle);
+    foreach ($schemes as $try_scheme) {
+        $lox_url = "{$try_scheme}://{$ip}:{$port}/data/LoxApp3.json";
+        $lox_ctx = stream_context_create([
+            'http' => [
+                'header'        => "Authorization: Basic " . base64_encode("{$user}:{$pass}") . "\r\n"
+                                 . "Range: bytes=0-16383\r\n",
+                'timeout'       => 5,
+                'ignore_errors' => true,
+            ],
+            'ssl'  => [
+                'verify_peer'      => false,   # Miniserver nutzt selbstsigniertes Zertifikat
+                'verify_peer_name' => false,
+            ],
+        ]);
+        $lox_handle = @fopen($lox_url, 'r', false, $lox_ctx);
+        if ($lox_handle) {
+            $lox_raw = fread($lox_handle, 16384);
+            fclose($lox_handle);
+            if ($lox_raw) break;  # Verbindung erfolgreich – kein Fallback nötig
+        }
     }
 
     if ($lox_raw) {
@@ -110,9 +124,10 @@ if ($action === 'get_miniserver_coords') {
     }
 
     if (!$location_str && !$lox_raw) {
+        $tried = implode(' und ', array_map(fn($s) => $s . '://' . $ip . ':' . $port, $schemes));
         echo json_encode([
-            'error' => 'Miniserver nicht erreichbar unter ' . $ip . ':' . $port . '. '
-                     . 'Bitte Miniserver-IP und Zugangsdaten in LoxBerry prüfen.',
+            'error' => 'Miniserver nicht erreichbar. Versucht: ' . $tried . '. '
+                     . 'Bitte Miniserver-IP, Port und Zugangsdaten in LoxBerry prüfen.',
         ]);
         exit;
     }
