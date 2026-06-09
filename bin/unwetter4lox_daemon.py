@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Unwetter4Lox Daemon v0.4.5 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
+"""Unwetter4Lox Daemon v0.4.17 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math, re
 from datetime import datetime, timezone, timedelta
 from collections import deque
@@ -587,7 +587,8 @@ def correlate_tawes():
                 regen_upstream = 1
                 break
 
-    # Max-Regenintensität upstream (mm/h) – für Alarm-Schwelle in build_alarm
+    # Max-Regenintensität upstream in mm/h – für Alarm-Schwelle in build_alarm.
+    # TAWES RR = mm/10min → ×6 ergibt mm/h (damit REGEN_ALARM-Vergleich korrekt ist).
     regen_upstream_mm = 0.0
     if regen_upstream:
         for sid in regen_start:
@@ -596,7 +597,7 @@ def correlate_tawes():
             max_rr = max((b.get('RR') or 0 for b in recent), default=0)
             if max_rr > regen_upstream_mm:
                 regen_upstream_mm = max_rr
-        regen_upstream_mm = round(regen_upstream_mm, 1)
+        regen_upstream_mm = round(regen_upstream_mm * 6, 1)  # mm/10min → mm/h
 
     upstream_mit_regen = sorted([st for st in upstream_list if st['id'] in regen_start],
                                  key=lambda x: x['dist_km'], reverse=True)
@@ -914,7 +915,7 @@ def publish_all(zamg, akut, inca, prev_ids, new_ids, status_msg, tawes=None, pre
 # ---------------------------------------------------------------------------
 def run():
     global _tawes_last_fetch
-    log.info(f'Unwetter4Lox v0.4.5 gestartet | {LAT},{LON} | Lang={LBLANG} | Interval={INTERVAL}s | ZAMG={ZAMG_ENABLED} INCA={INCA_ENABLED} TAWES={TAWES_ENABLED}')
+    log.info(f'Unwetter4Lox v0.4.17 gestartet | {LAT},{LON} | Lang={LBLANG} | Interval={INTERVAL}s | ZAMG={ZAMG_ENABLED} INCA={INCA_ENABLED} TAWES={TAWES_ENABLED}')
     _tawes_last_fetch = 0
     while True:
         try:

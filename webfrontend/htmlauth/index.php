@@ -294,7 +294,11 @@ if ($tawes_en):
     <li><span class="ui-li-count"><?= number_format($tawes['wind_upstream_kmh'] ?? 0, 1) ?> km/h</span><?= $L['MAIN.TAWES_WIND_UPSTREAM'] ?></li>
     <?php $trend = (int)($tawes['wind_trend'] ?? 0); ?>
     <li><span class="ui-li-count" style="color:<?= $trend>0?'#f44336':($trend<0?'#4CAF50':'#888') ?>"><?= $trend>0?'↑ zunehmend':($trend<0?'↓ abnehmend':'→ stabil') ?></span><?= $L['MAIN.TAWES_WIND_TREND'] ?></li>
-    <li><span class="ui-li-count" style="color:<?= $regen_up?'#2196F3':'#4CAF50' ?>"><?= $regen_up ? ($eta>=0 ? "~{$eta} min" : $L['MAIN.TAWES_ETA_UNKNOWN']) : $L['MAIN.TAWES_KEIN_REGEN'] ?></span><?= $L['MAIN.TAWES_REGEN'] ?></li>
+    <?php $regen_up_mm = (float)($tawes['regen_upstream_mm'] ?? 0); ?>
+    <li><span class="ui-li-count" style="color:<?= $regen_up?'#2196F3':'#4CAF50' ?>">
+        <?= $regen_up ? ($eta>=0 ? "~{$eta} min" : $L['MAIN.TAWES_ETA_UNKNOWN']) : $L['MAIN.TAWES_KEIN_REGEN'] ?>
+        <?= ($regen_up && $regen_up_mm > 0) ? " ({$regen_up_mm} mm/h)" : '' ?>
+    </span><?= $L['MAIN.TAWES_REGEN'] ?></li>
     <?php if ($regen_up && $eta >= 0): ?>
     <li><span class="ui-li-count"><?= number_format($tawes['front_speed_kmh'] ?? 0, 0) ?> km/h</span><?= $L['MAIN.TAWES_FRONT_SPEED'] ?> <small>(<?= (int)($tawes['regen_konfidenz'] ?? 0) ?>%)</small></li>
     <?php endif; ?>

@@ -92,7 +92,7 @@ code { background:#f0f0f0; padding:1px 4px; border-radius:3px; font-size:10px; f
 <tr><td><code>alarm/gesamt</code></td><td>0–3</td><td><b>max(gewitter, wind, regen, hagel, schnee)</b>. <b>0</b>=ruhig, <b>1</b>=Vorsicht (Gelb/Schwelle), <b>2</b>=Warnung (Orange/überschritten), <b>3</b>=Extrem (Rot/Lila). <b>Primärer Gate-Wert.</b></td></tr>
 <tr><td><code>alarm/gewitter</code></td><td>0–3</td><td><b>1</b>=möglich (ZAMG Gelb od. TAWES Lvl 1), <b>2</b>=Warnung (ZAMG Orange od. TAWES Lvl 2 od. Akutwarnung), <b>3</b>=Extrem (ZAMG Rot/Lila)</td></tr>
 <tr><td><code>alarm/wind</code></td><td>0–3</td><td><b>1</b>=Vorsicht (ZAMG Gelb od. INCA/TAWES ≥ BOEN_ALARM), <b>2</b>=Warnung (ZAMG Orange od. INCA 30min od. TAWES 2×BOEN), <b>3</b>=Extrem (ZAMG Rot/Lila)</td></tr>
-<tr><td><code>alarm/regen</code></td><td>0–2</td><td><b>1</b>=erwartet (ZAMG Gelb od. TAWES upstream), <b>2</b>=Starkregen (ZAMG Orange od. INCA ≥ REGEN_ALARM od. TAWES ETA ≤30min). Nieselregen/bald_regen löst <b>keinen</b> Alarm aus.</td></tr>
+<tr><td><code>alarm/regen</code></td><td>0–2</td><td><b>1</b>=erwartet (ZAMG Gelb od. TAWES upstream mit Intensität ≥ REGEN_ALARM/3), <b>2</b>=Starkregen (ZAMG Orange od. INCA ≥ REGEN_ALARM od. TAWES ETA ≤30min). Nieselregen/bald_regen löst <b>keinen</b> Alarm aus.</td></tr>
 <tr><td><code>alarm/hagel</code></td><td>0–2</td><td><b>1</b>=möglich (ZAMG Gelb od. INCA bald_hagel/graupel), <b>2</b>=Warnung (ZAMG Orange+)</td></tr>
 <tr><td><code>alarm/schnee</code></td><td>0–2</td><td><b>1</b>=möglich (ZAMG Gelb od. INCA PT=Schnee/Schneeregen), <b>2</b>=Warnung (ZAMG Orange+). Inkl. Glatteis.</td></tr>
 <tr><td><code>alarm/stufe</code></td><td>0–4</td><td>Höchste <b>offizielle ZAMG</b>-Warnstufe (nur ZAMG, kein INCA/TAWES)</td></tr>
@@ -140,14 +140,15 @@ Mehrere Kategorien: <code>⚡ Gewitter Warnung | 💨 Sturm Warnung</code></td><
 </table>
 
 <p style="margin-top:8px"><b>alarm/regen</b> – <code>inca/bald_regen</code> und Regenraten unter REGEN_ALARM lösen keinen Alarm aus. Für Bewässerungsabschaltung direkt <code>inca/bald_regen</code> in Loxone verwenden.</p>
+<p style="font-size:11px;color:#666"><b>TAWES Intensitäts-Gate:</b> TAWES löst nur einen Alarm aus wenn <code>tawes/regen_upstream_mm</code> ≥ REGEN_ALARM/3. Bei 30 mm/h Schwelle: mind. 10 mm/h upstream nötig. Nieselregen upstream setzt <code>tawes/regen_upstream=1</code> (Info), aber keinen Alarm.</p>
 <table class="mqtt-table">
 <thead><tr><th>Quelle</th><th>Bedingung</th><th>→ Level</th></tr></thead>
 <tbody>
 <tr><td>ZAMG</td><td>Regen Gelb (Stufe 1)</td><td><b>1</b></td></tr>
-<tr><td>TAWES</td><td>Regenfront upstream, ETA &gt;30 min</td><td><b>1</b></td></tr>
+<tr><td>TAWES</td><td>Regenfront upstream, Intensität ≥ REGEN_ALARM/3, ETA &gt;30 min</td><td><b>1</b></td></tr>
 <tr><td>ZAMG</td><td>Regen Orange/höher (Stufe 2+)</td><td><b>2</b></td></tr>
 <tr><td>INCA</td><td>Regenrate ≥ REGEN_ALARM (= <code>inca/regen_alarm</code>)</td><td><b>2</b></td></tr>
-<tr><td>TAWES</td><td>Regenfront upstream, ETA ≤30 min</td><td><b>2</b></td></tr>
+<tr><td>TAWES</td><td>Regenfront upstream, Intensität ≥ REGEN_ALARM/3, ETA ≤30 min</td><td><b>2</b></td></tr>
 </tbody>
 </table>
 
@@ -219,7 +220,8 @@ Mehrere Kategorien: <code>⚡ Gewitter Warnung | 💨 Sturm Warnung</code></td><
 <tr><td><code>tawes/wind_upstream_kmh</code></td><td>km/h</td><td>Max. Böen an Upstream-Stationen – kommt bald zu dir</td></tr>
 <tr><td><code>tawes/wind_trend</code></td><td>-1 / 0 / 1</td><td>-1=abnehmend, 0=stabil, 1=zunehmend (letzte 60 min)</td></tr>
 <tr><td><code>tawes/sturm_upstream</code></td><td>0 / 1</td><td>1 = Sturmböen an Upstream-Stationen (über Böen-Schwelle)</td></tr>
-<tr><td><code>tawes/regen_upstream</code></td><td>0 / 1</td><td>1 = Regen wird an mind. einer Upstream-Station gemessen</td></tr>
+<tr><td><code>tawes/regen_upstream</code></td><td>0 / 1</td><td>1 = Regen wird an mind. einer Upstream-Station gemessen (ab ~0,6 mm/h)</td></tr>
+<tr><td><code>tawes/regen_upstream_mm</code></td><td>mm/h</td><td>Max. Regenintensität an Upstream-Stationen. 0 = kein Regen. Entscheidet ob TAWES <code>alarm/regen</code> setzt (Schwelle: REGEN_ALARM/3).</td></tr>
 <tr><td><code>tawes/regen_eta_min</code></td><td>Minuten / -1</td><td>Geschätzte Zeit bis Regenfront ankommt. -1 = unbekannt (zu wenig Daten).</td></tr>
 <tr><td><code>tawes/regen_konfidenz</code></td><td>0–100</td><td>Konfidenz der ETA-Berechnung in Prozent</td></tr>
 <tr><td><code>tawes/front_speed_kmh</code></td><td>km/h</td><td>Berechnete Geschwindigkeit der Regenfront</td></tr>
@@ -353,7 +355,8 @@ Mehrere Kategorien: <code>⚡ Gewitter Warnung | 💨 Sturm Warnung</code></td><
 
 <div data-role="collapsible" data-collapsed="true">
 <h4>Warum zeigt TAWES keine Stationen?</h4>
-<p>Beim ersten Start lädt der Daemon die Stationsliste von der GeoSphere API. Das kann 1–2 Minuten dauern. Danach wird die Liste täglich gecacht. Falls der Cache beschädigt ist: In den Einstellungen → TAWES → "Stations-Cache neu laden".</p>
+<p>Beim ersten Start nach Installation lädt der Daemon die Stationsliste <b>immer frisch von der API</b> – der lokale Cache wird dabei bewusst ignoriert (verhindert veraltete IDs nach Plugin-Updates). Das kann 1–2 Minuten dauern. Danach wird die Liste täglich gecacht.</p>
+<p>Falls Stationen nach einem Update fehlen: Daemon über den Status-Tab neu starten – das erzwingt einen frischen API-Abruf. Falls weiterhin Probleme: In den Einstellungen → TAWES → "Stations-Cache neu laden".</p>
 </div>
 
 <div data-role="collapsible" data-collapsed="true">

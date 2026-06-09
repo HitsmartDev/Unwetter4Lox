@@ -1,4 +1,4 @@
-# Unwetter4Lox v0.4.8
+# Unwetter4Lox v0.4.17
 
 **LoxBerry-Plugin für automatische Unwettererkennung und Wetterautomatisierung.**
 
@@ -102,10 +102,12 @@ Alle `alarm/`-Topics verwenden **einheitliche Level** mit gleicher Bedeutung üb
 | Quelle | Bedingung | → Level |
 |:-------|:----------|:-------:|
 | ZAMG | Regen-Warnung Gelb (Stufe 1) | **1** |
-| TAWES | Regenfront upstream, ETA > 30 min | **1** |
+| TAWES | Regenfront upstream, Intensität ≥ **REGEN_ALARM/3**, ETA > 30 min | **1** |
 | ZAMG | Regen-Warnung Orange/höher | **2** |
 | INCA | Aktuelle Regenrate ≥ **REGEN_ALARM** (`inca/regen_alarm`) | **2** |
-| TAWES | Regenfront upstream, ETA ≤ 30 min | **2** |
+| TAWES | Regenfront upstream, Intensität ≥ **REGEN_ALARM/3**, ETA ≤ 30 min | **2** |
+
+> **TAWES Intensitäts-Gate:** TAWES löst nur einen Alarm aus wenn `tawes/regen_upstream_mm` ≥ REGEN_ALARM/3 (= bei 30 mm/h Standard-Schwelle mindestens 10 mm/h upstream). Leichter Nieselregen (unter diesem Wert) setzt `tawes/regen_upstream=1` (Info), aber keinen Alarm. Ist die Intensität unbekannt (0), wird zur Sicherheit alarmiert.
 
 > `inca/bald_regen` und Regenraten unter REGEN_ALARM werden absichtlich **nicht** für `alarm/regen` verwendet. Wer auf leichten Regen reagieren will (Bewässerung), nimmt `inca/bald_regen` direkt als Trigger in Loxone.
 
@@ -150,14 +152,16 @@ Empfehlungen:
 
 **Standard: 10.0 mm/h** (starker Regen)
 
-Wirkt an zwei Stellen gleichzeitig:
+Wirkt an drei Stellen gleichzeitig:
 1. `inca/regen_alarm = 1` – wenn aktuelle Regenrate ≥ Schwelle
 2. `alarm/regen` Level 2 – wenn `regen_alarm = 1`
+3. `alarm/regen` via TAWES – nur wenn Upstream-Intensität (`tawes/regen_upstream_mm`) ≥ Schwelle/3 ist (= bedeutsamer Regen, nicht Nieselregen)
 
 Empfehlungen:
 - `2.0 mm/h` – Deutlich spürbarer Regen (für Bewässerungsabschaltung via `alarm/regen`)
 - `10.0 mm/h` – Starkregen (Standard)
 - `20.0 mm/h` – Nur bei Starkregen mit Überflutungsgefahr
+- `30.0 mm/h` – Schwere Unwetterlage; TAWES triggert erst ab ≥ 10 mm/h upstream
 
 ---
 
@@ -268,7 +272,8 @@ Mehrere aktive Kategorien werden mit ` \| ` verbunden, z.B.: `⚡ Gewitter Warnu
 | `tawes/wind_upstream_kmh` | Max. Böen aus Windrichtung | km/h |
 | `tawes/sturm_upstream` | Upstream-Böen ≥ BOEN_ALARM | `0` / `1` |
 | `tawes/wind_trend` | Wind-Trendrichtung (2h Regression) | `-1`=fallend, `0`=stabil, `1`=steigend |
-| `tawes/regen_upstream` | Regen aus Windrichtung kommend | `0` / `1` |
+| `tawes/regen_upstream` | Regen aus Windrichtung kommend (ab 0,6 mm/h) | `0` / `1` |
+| `tawes/regen_upstream_mm` | Intensität des Upstream-Regens | mm/h (0 = kein Regen) |
 | `tawes/regen_eta_min` | Minuten bis Regenfront ankommt | min (`-1` = unbekannt) |
 | `tawes/front_speed_kmh` | Geschwindigkeit der Regenfront | km/h |
 | `tawes/regen_konfidenz` | Zuverlässigkeit der Vorhersage | `0`–`100` (%) |
