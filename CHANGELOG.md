@@ -5,6 +5,15 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/).
 
 ---
 
+## [0.4.33] – 2026-06-13
+
+### Behoben
+- **Kompatibilität mit älteren Python-Versionen**: `datetime.fromisoformat` entfernt, da dies erst ab Python 3.7 verfügbar ist und auf älteren LoxBerry-Systemen zum Absturz führte.
+- **Fehlerdiagnose**: Der Daemon schreibt nun bei fatalen Fehlern einen Traceback in `log/plugins/unwetter4lox/crash.log` und ins reguläre Plugin-Log.
+- **Robustheit**: Die Initialisierungs-Logik und das Publizieren der Daten wurden weiter vereinfacht, um "lautlose" Abstürze zu verhindern.
+
+---
+
 ## [0.4.32] – 2026-06-13
 
 ### Hinzugefügt

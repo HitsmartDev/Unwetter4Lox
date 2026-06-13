@@ -1,6 +1,6 @@
 ## 📌 Projekt-Status
-- **Version:** 0.4.32 (ZIP: `unwetter4Lox-V.0.4.32.zip`)
-- **Letzter Stand (Gemini, 2026-06-13):** v0.4.32 implementiert. Initialisierungs-Abruf historischer TAWES-Daten (60min) beim Start verhindert leere Stationslisten nach Update/Neustart. Status-Meldung "Initialisierung..." hinzugefügt.
+- **Version:** 0.4.33 (ZIP: `unwetter4Lox-V.0.4.33.zip`)
+- **Letzter Stand (Gemini, 2026-06-13):** v0.4.33 implementiert. **Safe-Boot Fix:** Inkompatibilität mit Python < 3.7 (`fromisoformat`) behoben. Detailliertes Exception-Logging via Traceback und `crash.log` hinzugefügt.
 
 ---
 

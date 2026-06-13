@@ -1,0 +1,51 @@
+# ---------------------------------------------------------------------------
+# LoxBerry Logging Initialisierung
+# ---------------------------------------------------------------------------
+log = None
+LOGFILE = None
+
+def get_loxberry_loglevel():
+    """Ruft den konfigurierten Log-Level via perl-bridge ab (0-7)."""
+    try:
+        bridge = os.path.join(LBHOMEDIR, 'bin', 'plugins', LBPPLUGINDIR, 'loglevel.pl')
+        if not os.path.exists(bridge):
+            bridge = os.path.join(os.path.dirname(__file__), 'loglevel.pl')
+        res = subprocess.check_output(['perl', bridge], encoding='utf-8').strip()
+        return int(res) if res.isdigit() else 6
+    except:
+        return 6
+
+CURRENT_LOGLEVEL = get_loxberry_loglevel()
+
+if LB_SDK:
+    # Offizielles SDK nutzen (wie in aloxberry)
+    # name='Daemon' registriert das Log in der LoxBerry Log-DB
+    log = loxberry.log.Logger(name='Daemon', package=LBPPLUGINDIR, logdir=LOGDIR)
+    log.start()
+    LOGFILE = log.filename
+    # WICHTIG: Pointer fuer Web-UI aktuell halten (falls SDK Dateinamen mit Zeitstempel nutzt)
+    CURRENT_LOG_PTR = os.path.join(LOGDIR, 'daemon.log.current')
+    try:
+        with open(CURRENT_LOG_PTR, 'w') as _f:
+            _f.write(LOGFILE)
+    except: pass
+else:
+    # Fallback: Manuelles Logging
+    class LoxBerryFormatter(logging.Formatter):
+        TAG_MAP = {'DEBUG': '<DEBUG>', 'INFO': '<OK>', 'WARNING': '<WARNING>', 'ERROR': '<ERR>', 'CRITICAL': '<CRIT>'}
+        def format(self, record):
+            tag = self.TAG_MAP.get(record.levelname, '<OK>')
+            ts  = self.formatTime(record, '%Y-%m-%d %H:%M:%S')
+            return f'{ts} {tag} {record.getMessage()}'
+
+    ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+    LOGFILE = os.path.join(LOGDIR, f'daemon_{ts}.log')
+    with open(LOGFILE, 'w', encoding='utf-8') as f:
+        f.write(f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} <LOGSTART> Unwetter4Lox Daemon\n')
+    
+    _fh = logging.FileHandler(LOGFILE, mode='a', encoding='utf-8')
+    _fh.setFormatter(LoxBerryFormatter())
+    logging.basicConfig(level=(logging.DEBUG if CURRENT_LOGLEVEL >= 7 else logging.INFO), handlers=[_fh])
+    log = logging.getLogger('unwetter4lox')
+
+log.info(f'Logging initialisiert (Level {CURRENT_LOGLEVEL})')

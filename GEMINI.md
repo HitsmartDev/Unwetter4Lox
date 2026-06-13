@@ -1,4 +1,4 @@
-# Gemini Handoff – Unwetter4Lox v0.4.32
+# Gemini Handoff – Unwetter4Lox v0.4.33
 
 Letzter Stand: 2026-06-13 (Gemini)
 
@@ -6,19 +6,19 @@ Letzter Stand: 2026-06-13 (Gemini)
 
 ## Aktueller Projektstatus
 
-Plugin in aktiver Entwicklung. Version 0.4.32. Fokus auf sofortige Datenverfügbarkeit nach dem Start/Update (Cold-Start Problem behoben).
+Plugin in aktiver Entwicklung. Version 0.4.33 (Safe-Boot). Fokus auf Abwärtskompatibilität und Stabilität nach Inkompatibilitäts-Problemen in v0.4.32.
 
 ---
 
 ## Was zuletzt geändert wurde (diese Session)
 
-### v0.4.32 (2026-06-13)
-**Initialisierungs-Logik & TAWES-Historie:**
-- **Historischer Daten-Abruf:** Beim ersten Loop-Durchlauf nach dem Start ruft der Daemon nun via `fetch_tawes_data(duration_min=60)` die historischen Daten der letzten Stunde ab. Dies füllt den `TAWES_BUFFER` (In-Memory) sofort, sodass Trends, Kaskaden und Display-Werte ohne Verzögerung zur Verfügung stehen.
-- **Status-Meldung:** Während dieses initialen Abrufs steht der Status in der UI auf `Initialisierung...`.
-- **API-Endpoint Wechsel:** Nutzt für den Initial-Load den `/timeseries/historical` Endpoint der GeoSphere API.
+### v0.4.33 (2026-06-13)
+**Safe-Boot & Kompatibilitäts-Fix:**
+- **Python-Fix:** `datetime.fromisoformat` entfernt (verfügbar erst ab Python 3.7). Ersetzt durch `strptime`-Logik, um auch auf älteren LoxBerrys (Python 3.5/3.6) stabil zu laufen.
+- **Fehler-Diagnose:** Detaillierte Exception-Tracebacks werden nun in `log/plugins/unwetter4lox/crash.log` geschrieben, falls der Daemon abstürzt.
+- **Initialisierungs-Logik:** Verschlankte `publish_all` und `correlate_tawes` Funktionen zur Minimierung von Laufzeitfehlern beim Start.
 
-### v0.4.31 (2026-06-13)
+### v0.4.32 (2026-06-13)
 ...
 
 - `regen_upstream` Buffer-Fenster auf 30min begrenzt (`REGEN_PUFFER_FENSTER = 3` Einträge). Verhindert "Regen bei Vöcklabruck" Notification Stunden nach dem letzten Regen.
