@@ -109,5 +109,34 @@ if [ -f "${PYDAEMON}" ]; then
     echo "<OK> Python-Daemon chmod +x: ${PYDAEMON}"
 fi
 
+# Daemon nach Installation/Update automatisch starten wenn Standort konfiguriert ist.
+# Läuft hier aus postroot.sh (root) – kein sudo nötig, zuverlässiger als postinstall.sh.
+# Bevorzugt su -s /bin/bash loxberry damit der Daemon als loxberry-User läuft;
+# Fallback: direkte Ausführung als root (daemon.py funktioniert auch ohne LoxBerry SDK).
+if [ -f "${DAEMONSCRIPT}" ] && [ -f "${CFGFILE}" ]; then
+    LAT=$(grep "^LAT=" "${CFGFILE}" 2>/dev/null | cut -d= -f2 | tr -d ' \r')
+    LON=$(grep "^LON=" "${CFGFILE}" 2>/dev/null | cut -d= -f2 | tr -d ' \r')
+    if [ -n "$LAT" ] && [ -n "$LON" ]; then
+        echo "<INFO> Standort konfiguriert (${LAT},${LON}) – starte Daemon nach Install/Update..."
+        # runuser (Debian/Raspbian): kein Passwort nötig, speziell für root→user Transition
+        if command -v runuser >/dev/null 2>&1; then
+            runuser -s /bin/bash -c "\"${DAEMONSCRIPT}\" restart >/dev/null 2>&1" loxberry \
+                && echo "<OK> Daemon als loxberry-User gestartet (runuser)" \
+                || echo "<WARNING> runuser Daemon-Start fehlgeschlagen"
+        elif su -s /bin/bash loxberry -c "\"${DAEMONSCRIPT}\" restart >/dev/null 2>&1" 2>/dev/null; then
+            echo "<OK> Daemon als loxberry-User gestartet (su)"
+        else
+            echo "<INFO> su fehlgeschlagen, starte direkt als root..."
+            "${DAEMONSCRIPT}" restart >/dev/null 2>&1 \
+                && echo "<OK> Daemon als root gestartet" \
+                || echo "<WARNING> Daemon-Start fehlgeschlagen – bitte manuell über Plugin-UI starten"
+        fi
+    else
+        echo "<INFO> Kein Standort konfiguriert – Daemon wird nach Konfiguration gestartet"
+    fi
+else
+    echo "<INFO> Daemon-Script oder Config noch nicht vorhanden – wird nach Konfiguration gestartet"
+fi
+
 echo "<OK> postroot.sh abgeschlossen"
 exit 0

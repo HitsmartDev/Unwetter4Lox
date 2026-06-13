@@ -60,7 +60,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     $c .= "[TAWES]\n";
     $c .= "ENABLED={$tawes_en}\n";
-    $c .= "MAX_DISTANCE_KM=" . max(20, min(150, intval($_POST['tawes_max_km'] ?? 120))) . "\n";
+    $c .= "MAX_DISTANCE_KM="   . max(20,  min(150, intval($_POST['tawes_max_km']          ?? 120))) . "\n";
+    $c .= "MAX_STATIONS="      . max(5,   min(50,  intval($_POST['tawes_max_stations']     ?? 25)))  . "\n";
+    $c .= "MIN_ALARM_PROZENT=" . max(10,  min(100, intval($_POST['tawes_min_alarm_prozent'] ?? 30))) . "\n";
+    $c .= "MAX_UPSTREAM_HOEHE_M=" . max(0, min(3000, intval($_POST['tawes_max_upstream_hoehe'] ?? 1200))) . "\n";
+    $c .= "REGEN_LOKAL_KM="    . max(5,   min(100, intval($_POST['tawes_regen_lokal_km']   ?? 25)))  . "\n";
 
     if (file_put_contents($cfgfile, $c) !== false) {
         $saved  = true;
@@ -201,20 +205,65 @@ if (file_exists($tawes_cache)) {
            value="<?= htmlspecialchars($cfg['TAWES']['MAX_DISTANCE_KM'] ?? '120') ?>"
            oninput="document.getElementById('tkm').textContent=this.value">
 </div>
+<div class="ui-field-contain">
+    <label for="tawes_max_stations">Max. Stationen (API): <span id="tms"><?= htmlspecialchars($cfg['TAWES']['MAX_STATIONS'] ?? '25') ?></span></label>
+    <input type="range" id="tawes_max_stations" name="tawes_max_stations" min="5" max="50" step="5"
+           value="<?= htmlspecialchars($cfg['TAWES']['MAX_STATIONS'] ?? '25') ?>"
+           oninput="document.getElementById('tms').textContent=this.value">
+</div>
+<p style="font-size:11px;color:#888;margin:2px 0">Anzahl der nächstgelegenen Stationen die pro Zyklus von der API abgefragt werden. Mehr Stationen = genauerer Konsens, aber mehr Netzlast.</p>
+<div class="ui-field-contain">
+    <label for="tawes_min_alarm_prozent">Konsens-Schwelle (Alarm): <span id="tmap"><?= htmlspecialchars($cfg['TAWES']['MIN_ALARM_PROZENT'] ?? '30') ?></span>%</label>
+    <input type="range" id="tawes_min_alarm_prozent" name="tawes_min_alarm_prozent" min="10" max="100" step="10"
+           value="<?= htmlspecialchars($cfg['TAWES']['MIN_ALARM_PROZENT'] ?? '30') ?>"
+           oninput="document.getElementById('tmap').textContent=this.value">
+</div>
+<p style="font-size:11px;color:#888;margin:2px 0">Mindestanteil der Upstream-Stationen MIT Daten die den Schwellwert überschreiten müssen (Wind ≥ Böenalarm / Regen erkannt). Verhindert False-Positives durch einzelne Ausreißer-Stationen.</p>
+<div class="ui-field-contain">
+    <label for="tawes_max_upstream_hoehe">Max. Seehöhe Upstream (Wind-Alarm): <span id="tmueh"><?= htmlspecialchars($cfg['TAWES']['MAX_UPSTREAM_HOEHE_M'] ?? '1200') ?></span> m</label>
+    <input type="range" id="tawes_max_upstream_hoehe" name="tawes_max_upstream_hoehe" min="0" max="3000" step="100"
+           value="<?= htmlspecialchars($cfg['TAWES']['MAX_UPSTREAM_HOEHE_M'] ?? '1200') ?>"
+           oninput="document.getElementById('tmueh').textContent=this.value">
+</div>
+<p style="font-size:11px;color:#888;margin:2px 0">Upstream-Stationen über dieser Seehöhe (Meter) werden aus dem Wind-Alarm-Konsens ausgeschlossen (z.B. Feuerkogel 1618m, Schafberg 1783m). Verhindert False-Alarms durch natürlich höhere Bergwind-Werte. 0 = alle Stationen einbeziehen.</p>
+<div class="ui-field-contain">
+    <label for="tawes_regen_lokal_km">Lokal-Regen Umkreis: <span id="trlkm"><?= htmlspecialchars($cfg['TAWES']['REGEN_LOKAL_KM'] ?? '25') ?></span> km</label>
+    <input type="range" id="tawes_regen_lokal_km" name="tawes_regen_lokal_km" min="5" max="50" step="5"
+           value="<?= htmlspecialchars($cfg['TAWES']['REGEN_LOKAL_KM'] ?? '25') ?>"
+           oninput="document.getElementById('trlkm').textContent=this.value">
+</div>
+<p style="font-size:11px;color:#888;margin:2px 0">Umkreis in km für die Erkennung von lokalem Regen (Stationen unabhängig von der Windrichtung). Stationen innerhalb dieses Radius, die aktuell Regen melden, aktivieren <code>tawes/regen_lokal</code> und können <code>alarm/regen</code> auslösen. Stationen außerhalb des Radius sind in der Stations-Anzeige sichtbar, fließen aber nicht in den Alarm ein. Standard: 25 km.</p>
 <p style="font-size:11px;color:#888">
     Stations-Cache: <b><?= $st_count ?></b> Stationen geladen.
     <?= $st_count ? '(tawes_stations.json vorhanden)' : '(wird beim ersten Daemon-Start geladen)' ?>
 </p>
 <a href="ajax.php?action=reload_stations" id="btn_reload_st" data-role="button" data-inline="true" data-mini="true" data-icon="refresh"><?= $L['MAIN.TAWES_RELOAD_STATIONS'] ?></a>
-<div id="reload_msg" style="display:none;color:#4CAF50;font-size:12px;margin-top:6px"></div>
+<div id="reload_msg" style="display:none;font-size:12px;margin-top:6px"></div>
 <script>
 $(function(){
     $('#btn_reload_st').on('click', function(e){
         e.preventDefault();
-        $(this).addClass('ui-disabled');
+        var $btn = $(this).addClass('ui-disabled');
+        var $msg = $('#reload_msg').css('color','#aaa').text('⟳ Cache gelöscht, Daemon startet neu…').show();
         $.getJSON('ajax.php?action=reload_stations', function(d){
-            $('#btn_reload_st').removeClass('ui-disabled');
-            $('#reload_msg').text(d.msg || '<?= addslashes($L['MAIN.TAWES_RELOAD_OK']) ?>').show();
+            if (d.restart) {
+                // Auf Daemon-Start warten, dann Seite neu laden
+                var tries = 0;
+                var poll = setInterval(function(){
+                    tries++;
+                    $.getJSON('ajax.php?action=check_update', function(s){
+                        if (s.running) {
+                            clearInterval(poll);
+                            $msg.css('color','#4CAF50').text('✓ Daemon neugestartet – Seite wird geladen…');
+                            setTimeout(function(){ location.reload(); }, 800);
+                        }
+                    });
+                    if (tries >= 20) { clearInterval(poll); $btn.removeClass('ui-disabled'); $msg.css('color','#f97316').text('⚠ Timeout – bitte Seite manuell neu laden.'); }
+                }, 3000);
+            } else {
+                $btn.removeClass('ui-disabled');
+                $msg.css('color','#4CAF50').text(d.msg || '<?= addslashes($L['MAIN.TAWES_RELOAD_OK']) ?>');
+            }
         });
     });
 });

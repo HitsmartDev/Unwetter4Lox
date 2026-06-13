@@ -1,6 +1,14 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""Unwetter4Lox Daemon v0.4.18 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
+"""Unwetter4Lox Daemon v0.4.32 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT
+   Changelog:
+   v0.4.32: Historischer Daten-Abruf (letzte 60min) beim Start implementiert, um den
+            TAWES-Puffer sofort zu füllen (verhindert leere Stationslisten nach Update).
+            Status-Meldung "Initialisierung..." beim Start für besseres UI-Feedback.
+            Verbesserte Fehlerbehandlung beim State-Laden.
+   v0.4.31: MQTT LWT (Last Will and Testament) für Offline-Status implementiert.
+            Heartbeat-Topic status/last_seen (Epoch) zur Überwachung in UI/Loxone.
+            Status-Badge zeigt jetzt auch TAWES-Fehler an.
+            Verstärktes Logging im Haupt-Loop und Fehlerbehandlung.
+"""
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math, re
 from datetime import datetime, timezone, timedelta
 from collections import deque
@@ -24,6 +32,7 @@ os.makedirs(DATADIR, exist_ok=True)
 os.makedirs(LOGDIR,  exist_ok=True)
 STATE_FILE         = os.path.join(DATADIR, 'state.json')
 TAWES_CACHE_FILE   = os.path.join(DATADIR, 'tawes_stations.json')
+PID_FILE           = os.path.join(LOGDIR,  'daemon.pid')
 
 # ---------------------------------------------------------------------------
 # LoxBerry Logging Initialisierung
@@ -80,6 +89,11 @@ log.info(f'Logging initialisiert (Level {CURRENT_LOGLEVEL})')
 
 def _on_signal(signum, frame):
     log.info(f'Daemon gestoppt (Signal {signum})')
+    # MQTT Status auf Offline setzen
+    publish('status', L['status_err'].format(v='Gestoppt'), retain=True)
+    if os.path.exists(PID_FILE):
+        try: os.remove(PID_FILE)
+        except: pass
     if LB_SDK: log.stop()
     else:
         try:
@@ -120,8 +134,12 @@ INCA_ENABLED = get_cfg('INCA',              'ENABLED',             '1') == '1'
 INCA_HORIZON = int(get_cfg('INCA',          'HORIZON_MINUTES',     '60'))
 MIN_STUFE    = int(get_cfg('NOTIFICATIONS', 'MIN_STUFE',           '1'))
 TOPIC_PREFIX = get_cfg('MQTT',             'TOPIC_PREFIX',         'unwetter')
-TAWES_ENABLED   = get_cfg('TAWES',         'ENABLED',              '1') == '1'
-TAWES_MAX_KM    = float(get_cfg('TAWES',   'MAX_DISTANCE_KM',     '120'))
+TAWES_ENABLED        = get_cfg('TAWES', 'ENABLED',           '1') == '1'
+TAWES_MAX_KM         = float(get_cfg('TAWES', 'MAX_DISTANCE_KM',  '120'))
+TAWES_MAX_STATIONS   = max(5, int(get_cfg('TAWES', 'MAX_STATIONS',   '25')))
+TAWES_MIN_ALARM_PCT  = max(1, min(100, int(get_cfg('TAWES', 'MIN_ALARM_PROZENT', '30'))))
+TAWES_MAX_UPSTREAM_HOEHE = float(get_cfg('TAWES', 'MAX_UPSTREAM_HOEHE_M', '1200'))
+TAWES_REGEN_LOKAL_KM     = max(5.0, min(100.0, float(get_cfg('TAWES', 'REGEN_LOKAL_KM', '25'))))
 
 MQTT_BROKER = '127.0.0.1'; MQTT_PORT = 1883; MQTT_USER = ''; MQTT_PASS = ''
 USE_LB_MQTT = get_cfg('MQTT', 'USE_LOXBERRY_MQTT', '1') == '1'
@@ -184,7 +202,7 @@ T = {
         'sturm_30': '🟠 Sturmböen <30 min: max {v} km/h', 'sturm_60': '⚠️ Sturmböen <60 min: max {v} km/h',
         'regen_in': '🌧️ Regen in ~{v} min', 'regen_jetzt': '🌧️ Regen: {v} mm/h', 'kein_alarm': '✅ kein Alarm | Böen: {v} km/h',
         'no_warns': 'keine aktiven Warnungen', 'entwarnung': '✅ Entwarnung – alle Wetterwarnungen aufgehoben.',
-        'pt_none': 'kein Niederschlag', 'status_ok': 'OK', 'status_err': 'Fehler - {v}'
+        'pt_none': 'kein Niederschlag', 'status_ok': 'OK', 'status_err': 'Fehler - {v}', 'status_init': 'Initialisierung...'
     },
     'en': {
         'wind': 'Wind', 'regen': 'Rain', 'schnee': 'Snow', 'glatteis': 'Ice', 'gewitter': 'Thunderstorm', 'hitze': 'Heat', 'kaelte': 'Cold', 'hagel': 'Hail',
@@ -194,7 +212,7 @@ T = {
         'sturm_30': '🟠 Storm gusts <30 min: max {v} km/h', 'sturm_60': '⚠️ Storm gusts <60 min: max {v} km/h',
         'regen_in': '🌧️ Rain in ~{v} min', 'regen_jetzt': '🌧️ Rain: {v} mm/h', 'kein_alarm': '✅ no alarm | Gusts: {v} km/h',
         'no_warns': 'no active warnings', 'entwarnung': '✅ All-clear – all weather warnings lifted.',
-        'pt_none': 'no precipitation', 'status_ok': 'OK', 'status_err': 'Error - {v}'
+        'pt_none': 'no precipitation', 'status_ok': 'OK', 'status_err': 'Error - {v}', 'status_init': 'Initializing...'
     }
 }
 L = T.get(LBLANG, T['en'])
@@ -218,31 +236,68 @@ try:
 except: MQTT_OK = False
 mqtt_client, _mqtt_connected = None, threading.Event()
 def _on_connect(c, u, f, rc):
-    if rc == 0: _mqtt_connected.set()
-def _on_disconnect(c, u, rc): _mqtt_connected.clear()
+    if rc == 0:
+        _mqtt_connected.set()
+        log.info(f'MQTT: Verbunden mit {MQTT_BROKER}:{MQTT_PORT}')
+    else:
+        log.error(f'MQTT: Verbindung fehlgeschlagen (RC={rc})')
+
+def _on_disconnect(c, u, rc):
+    _mqtt_connected.clear()
+    if rc != 0: log.warning('MQTT: Verbindung zum Broker verloren')
+
 def mqtt_connect():
     global mqtt_client
     if not MQTT_OK: return False
+    
+    if mqtt_client is not None:
+        try:
+            mqtt_client.loop_stop()
+            mqtt_client.disconnect()
+        except: pass
+
     _mqtt_connected.clear()
     try:
         try: mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, client_id='unwetter4lox', clean_session=True)
         except: mqtt_client = mqtt.Client(client_id='unwetter4lox', clean_session=True)
         mqtt_client.on_connect, mqtt_client.on_disconnect = _on_connect, _on_disconnect
+        
+        # Last Will and Testament (LWT)
+        lwt_topic = f'{TOPIC_PREFIX}/status'
+        lwt_msg = L['status_err'].format(v='Offline (LWT)')
+        mqtt_client.will_set(lwt_topic, lwt_msg, qos=0, retain=True)
+        
         if MQTT_USER: mqtt_client.username_pw_set(MQTT_USER, MQTT_PASS)
         mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60); mqtt_client.loop_start()
         return _mqtt_connected.wait(timeout=8)
-    except: return False
+    except Exception as e:
+        log.error(f'MQTT: Fehler beim Verbindungsaufbau: {e}')
+        return False
 
 def publish(topic, value, retain=True):
     if mqtt_client and _mqtt_connected.is_set():
-        try: mqtt_client.publish(f'{TOPIC_PREFIX}/{topic}', str(value) if value is not None else '', qos=0, retain=retain)
-        except: pass
+        try:
+            full_topic = f'{TOPIC_PREFIX}/{topic}'
+            val_str = str(value) if value is not None else ''
+            mqtt_client.publish(full_topic, val_str, qos=0, retain=retain)
+        except Exception as e:
+            log.debug(f'MQTT: Publish fehlgeschlagen ({topic}): {e}')
 
 def fetch_json(url, provider):
+    url_short = url[:120]
     try:
         req = urllib.request.Request(url, headers={'User-Agent': 'Unwetter4Lox/0.4.0'})
-        with urllib.request.urlopen(req, timeout=15) as r: return json.loads(r.read().decode())
-    except Exception as e: log.error(f'HTTP {provider}: {e}'); return None
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        log.error(f'HTTP {provider}: Status {e.code} {e.reason} | {url_short}')
+    except urllib.error.URLError as e:
+        log.error(f'HTTP {provider}: Netzwerk-Fehler – {str(e.reason)[:80]} | {url_short}')
+    except json.JSONDecodeError as e:
+        log.error(f'HTTP {provider}: Ungültiges JSON (pos {e.pos}) | {url_short}')
+    except Exception as e:
+        log.error(f'HTTP {provider}: {type(e).__name__} – {e} | {url_short}')
+    return None
 
 # ---------------------------------------------------------------------------
 # GeoSphere ZAMG – Wetterwarnungen
@@ -281,10 +336,13 @@ def fetch_zamg():
 def fetch_inca():
     if not INCA_ENABLED: return {}
     now, res = datetime.now(tz=timezone.utc), dict(ff_jetzt=0.0, fx_jetzt=0.0, fx_max_30min=0.0, fx_max_60min=0.0, rr_jetzt=0.0, pt_jetzt=255, pt_name=L['pt_none'], pt_bald=255, pt_bald_name='', bald_regen=0, bald_hagel=0, bald_graupel=0, bald_sturm_30=0, bald_sturm_60=0, minuten_bis_regen=-1)
+    _fehler = []
     for param in ['ff', 'fx', 'rr', 'pt']:
         url = f'https://dataset.api.hub.geosphere.at/v1/timeseries/forecast/nowcast-v1-15min-1km?lat_lon={LAT}%2C{LON}&parameters={param}&output_format=geojson'
         data = fetch_json(url, f'INCA {param}')
-        if not data: return None
+        if not data:
+            _fehler.append(param)
+            continue  # Einzelnen Parameter überspringen statt alles aufgeben
         ts_list, features = data.get('timestamps', []), data.get('features', [])
         if not features: continue
         values = features[0].get('properties', {}).get('parameters', {}).get(param, {}).get('data', [])
@@ -319,15 +377,19 @@ def fetch_inca():
                 if i < len(serie) and datetime.fromisoformat(ts).timestamp() <= now.timestamp()+3600:
                     if serie[i] == 5: res['bald_hagel'] = 1
                     if serie[i] == 4: res['bald_graupel'] = 1
+    if len(_fehler) == 4:
+        return None  # Alle 4 Parameter fehlgeschlagen → kein nutzbares Ergebnis
+    if _fehler:
+        log.warning(f'INCA: {len(_fehler)}/4 Parameter fehlgeschlagen ({", ".join(_fehler)}) – Teildaten verwendet')
     return res
 
 # ---------------------------------------------------------------------------
 # TAWES 360° Stationsnetz & Korrelation
 # ---------------------------------------------------------------------------
 _tawes_all_stations = []       # In-Memory Cache der Stationsliste
-_tawes_startup_fresh_done = False  # Beim ersten Start immer frisch von API laden (ignoriert Cache)
 TAWES_BUFFER = {}              # station_id → deque(maxlen=12) [12×10min = 2h]
 _tawes_last_fetch = 0          # Timestamp letzter Messdaten-Abruf
+_tawes_fehler_count = 0        # Konsekutive TAWES-Fehler (für Log-Kontext)
 
 def _haversine(lat1, lon1, lat2, lon2):
     R = 6371; dlat = math.radians(lat2 - lat1); dlon = math.radians(lon2 - lon1)
@@ -356,34 +418,34 @@ def _linreg_slope(series):
 
 def _canon_sid(x):
     """Kanonische Station-ID: numerische Strings ohne führende Nullen (bidirektionales Matching).
-    Behandelt auch compound IDs wie 'tawes.11035' → '11035', '011001' → '11001'.
-    Alphanumerische IDs wie 'ASPACH' bleiben unverändert."""
+    Behandelt: '11035' → '11035', '011035' → '11035', '11035.0' → '11035',
+               'tawes.11035' → '11035', 'ST.11035-01' → '11035' (längste Zifferngruppe)."""
     s = str(x).strip()
-    # Direkt numerisch (häufigster Fall)
+    # Direkt ganzzahlig (häufigster Fall: int oder numerischer String)
     try: return str(int(s))
     except (ValueError, TypeError): pass
-    # Letzten numerischen Block extrahieren: 'tawes.11035' → '11035', 'st_011001' → '11001'
+    # Float-String wie '11035.0' → '11035'
+    try: return str(int(float(s)))
+    except (ValueError, TypeError): pass
+    # Längste Zifferngruppe extrahieren: 'tawes.11035' → '11035', 'ST.11035-01' → '11035'
+    # Längste statt letzte: vermeidet Fehlmatch bei Compound-IDs mit kurzer Nummer am Ende
     nums = re.findall(r'\d+', s)
-    if nums: return str(int(nums[-1]))
+    if nums: return str(int(max(nums, key=len)))
     return s
 
 def load_tawes_stations():
-    """Stationsliste laden. Beim ersten Daemon-Start immer frisch von API (verhindert Stale-Cache
-    nach Plugin-Update), danach täglich erneuert, sonst aus TAWES_CACHE_FILE."""
-    global _tawes_all_stations, _tawes_startup_fresh_done
+    """Stationsliste laden. Cache-File wird beim Daemon-Start gelöscht (run()),
+    daher ist beim ersten Aufruf immer ein frischer API-Abruf nötig.
+    Danach: In-Memory bevorzugt, sonst Datei-Cache (< 24h), sonst API."""
+    global _tawes_all_stations
     cache_age = time.time() - os.path.getmtime(TAWES_CACHE_FILE) if os.path.exists(TAWES_CACHE_FILE) else 999999
 
-    # In-Memory Cache nutzen: nur wenn Startup-Fetch bereits erfolgt und Cache frisch
-    if _tawes_all_stations and _tawes_startup_fresh_done and cache_age < 86400:
+    # In-Memory Cache nutzen wenn vorhanden and Datei-Cache noch frisch
+    if _tawes_all_stations and cache_age < 86400:
         return _tawes_all_stations
 
-    # Erster Aufruf nach Daemon-Start → Cache-File ignorieren, direkt API abrufen
-    # (verhindert Timing-Race zwischen postinstall.sh und Daemon-Start bei Updates)
-    if not _tawes_startup_fresh_done:
-        _tawes_startup_fresh_done = True
-        log.info('TAWES: Daemon-Start – Station-Cache ignoriert, frischer API-Abruf...')
-    # Nach Startup-Fetch: Datei-Cache nutzen wenn aktuell
-    elif os.path.exists(TAWES_CACHE_FILE) and cache_age < 86400:
+    # Datei-Cache nutzen wenn aktuell (< 24h)
+    if os.path.exists(TAWES_CACHE_FILE) and cache_age < 86400:
         try:
             with open(TAWES_CACHE_FILE, 'r', encoding='utf-8') as f:
                 loaded = json.load(f)
@@ -395,29 +457,43 @@ def load_tawes_stations():
             if cleaned:
                 _tawes_all_stations = cleaned
                 return _tawes_all_stations
-        except: pass
+        except Exception as e:
+            log.warning(f'TAWES: Fehler beim Laden des Cache-Files: {e}')
     # Von API laden – IDs sofort kanonisieren beim Speichern
     data = fetch_json('https://dataset.api.hub.geosphere.at/v1/station/current/tawes-v1-10min/metadata', 'TAWES-Metadata')
     if not data:
         return _tawes_all_stations  # Fallback auf alten Cache
     stations = []
     for s in data.get('stations', data.get('features', [])):
-        p = s.get('properties', s)
-        raw_id = p.get('id') or p.get('station_id') or s.get('id') or ''
-        sid = _canon_sid(raw_id)
-        if not sid or sid == 'None': continue
-        name = p.get('name', p.get('station_name', sid))
-        lat = float(p.get('lat', p.get('latitude', 0) or 0))
-        lon = float(p.get('lon', p.get('longitude', 0) or 0))
-        active = p.get('is_active', p.get('active', True))
-        if sid and lat and lon and active:
-            stations.append({'id': sid, 'name': name, 'lat': lat, 'lon': lon})
+        try:
+            p = s.get('properties', s)
+            raw_id = p.get('id') or p.get('station_id') or s.get('id') or ''
+            sid = _canon_sid(raw_id)
+            if not sid or sid == 'None': continue
+            name = p.get('name', p.get('station_name', sid))
+            
+            def _float(v):
+                if v is None: return 0.0
+                try: return float(v)
+                except: return 0.0
+
+            lat = _float(p.get('lat', p.get('latitude', 0)))
+            lon = _float(p.get('lon', p.get('longitude', 0)))
+            active = p.get('is_active', p.get('active', True))
+            alt = _float(p.get('alt', p.get('altitude', p.get('elevation', p.get('hoehe', 0)))))
+            
+            if sid and lat and lon and active:
+                stations.append({'id': sid, 'name': name, 'lat': lat, 'lon': lon, 'alt': alt})
+        except Exception as e:
+            log.debug(f'TAWES: Station-Parsing fehlgeschlagen: {e}')
+            continue
     if stations:
         _tawes_all_stations = stations
         try:
             with open(TAWES_CACHE_FILE, 'w', encoding='utf-8') as f:
                 json.dump(stations, f, ensure_ascii=False)
-        except: pass
+        except Exception as e:
+            log.warning(f'TAWES: Fehler beim Speichern des Cache-Files: {e}')
         log.info(f'TAWES: {len(stations)} Stationen geladen und gecacht')
     return _tawes_all_stations
 
@@ -429,101 +505,117 @@ def find_nearby_stations():
         if 2 < dist <= TAWES_MAX_KM:
             bear = _bearing(LAT, LON, st['lat'], st['lon'])
             result.append({'id': st['id'], 'name': st['name'], 'lat': st['lat'], 'lon': st['lon'],
-                           'dist_km': round(dist, 1), 'bearing': round(bear, 1), 'bearing_name': _bearing_to_name(bear)})
+                           'alt': st.get('alt', 0), 'dist_km': round(dist, 1), 'bearing': round(bear, 1), 'bearing_name': _bearing_to_name(bear)})
     return sorted(result, key=lambda x: x['dist_km'])
 
-def fetch_tawes_data(station_ids):
-    """Messdaten für bis zu 25 Stationen in einem API-Call."""
+def fetch_tawes_data(station_ids, duration_min=0):
+    """Messdaten für Stationen abrufen. 
+    Wenn duration_min > 0, wird der Timeseries-Endpoint für historische Daten genutzt."""
     if not station_ids: return {}
-    ids = station_ids[:25]
+    ids = station_ids[:TAWES_MAX_STATIONS]
     sid_params = '&'.join(f'station_ids={sid}' for sid in ids)
-    url = f'https://dataset.api.hub.geosphere.at/v1/station/current/tawes-v1-10min?parameters=RR,FF,FFX,DD,P,RF&{sid_params}&output_format=geojson'
+    
+    if duration_min > 0:
+        # Historische Daten (Timeseries) um den Puffer zu füllen
+        start_ts = (datetime.now(timezone.utc) - timedelta(minutes=duration_min)).strftime('%Y-%m-%dT%H:%M')
+        url = f'https://dataset.api.hub.geosphere.at/v1/timeseries/historical/tawes-v1-10min?parameters=RR,FF,FFX,DD,P,RF&{sid_params}&start={start_ts}&output_format=geojson'
+    else:
+        # Aktuelle Momentaufnahme
+        url = f'https://dataset.api.hub.geosphere.at/v1/station/current/tawes-v1-10min?parameters=RR,FF,FFX,DD,P,RF&{sid_params}&output_format=geojson'
+    
     data = fetch_json(url, 'TAWES-Data')
     if not data: return {}
+    
     ts_list = data.get('timestamps', [])
-    ts = int(time.time())
-    if ts_list:
-        try: ts = int(datetime.fromisoformat(ts_list[0].replace('Z', '+00:00')).timestamp())
-        except: pass
-    # Kanonisches Lookup: API gibt IDs in beliebigem Format zurück (int, str, führende Nullen, compound)
-    # _canon_sid extrahiert numerischen Kern aus beliebigem Format → bidirektionales Matching
-    canon_to_orig = {_canon_sid(str(i)): str(i) for i in ids}
-
-    # Debug-Log: erste 3 API-Features zeigen um ID-Format zu verstehen (hilft bei Diagnose)
     features = data.get('features', [])
-    if features:
-        sample = []
-        for f in features[:3]:
-            p = f.get('properties', {})
-            sample.append(f"station={p.get('station')!r} props.id={p.get('id')!r} feature.id={f.get('id')!r}")
-        log.debug(f'TAWES API ID-Format (erste 3): {" | ".join(sample)}')
+    canon_to_orig = {_canon_sid(str(i)): str(i) for i in ids}
+    result_map = {} # sid -> list of data points
 
-    result = {}
     for feature in features:
         props = feature.get('properties', {})
         raw_sid = props.get('station') or props.get('id') or feature.get('id') or ''
-        if not raw_sid: continue
         api_canon = _canon_sid(str(raw_sid))
-        if not api_canon or api_canon == 'None': continue
-        # Auf originale Cache-ID mappen (beide Seiten kanonisch → immer Match bei gleicher Basis-ID)
         matched_id = canon_to_orig.get(api_canon, str(raw_sid))
         params = props.get('parameters', {})
-        def _v(key):
-            raw = params.get(key, {}).get('data', [None])
-            v = raw[0] if raw else None
-            return float(v) if v is not None else None
-        result[matched_id] = {'ts': ts, 'RR': _v('RR'), 'FF': _v('FF'), 'FFX': _v('FFX'), 'DD': _v('DD'), 'P': _v('P'), 'RF': _v('RF')}
-    # ID-Mismatch Warnung: wenn API andere IDs zurückgibt als angefordert
-    requested_set = set(str(i) for i in ids)
-    unmatched = set(result.keys()) - requested_set
-    if unmatched:
-        log.warning(f'TAWES ID-Mismatch: {len(unmatched)} API-IDs passen nicht zu Cache-IDs: {list(unmatched)[:3]} '
-                    f'(angefragt z.B.: {list(requested_set)[:3]}). '
-                    f'Station-Cache löschen empfohlen!')
-    return result
+        
+        station_points = []
+        for i, timestamp in enumerate(ts_list):
+            try:
+                ts_epoch = int(datetime.fromisoformat(timestamp.replace('Z', '+00:00')).timestamp())
+            except: ts_epoch = int(time.time())
+            
+            def _v(key, idx):
+                raw = params.get(key, {}).get('data', [])
+                if idx >= len(raw): return None
+                v = raw[idx]
+                if v is None: return None
+                try:
+                    fv = float(v)
+                    return None if (math.isnan(fv) or math.isinf(fv)) else fv
+                except: return None
+            
+            point = {'ts': ts_epoch, 'RR': _v('RR', i), 'FF': _v('FF', i), 'FFX': _v('FFX', i), 'DD': _v('DD', i), 'P': _v('P', i), 'RF': _v('RF', i)}
+            station_points.append(point)
+        
+        if station_points:
+            result_map[matched_id] = station_points
 
-def correlate_tawes():
+    # Für Abwärtskompatibilität mit dem restlichen Code: 
+    # Wenn duration_min=0, geben wir sid -> {last_point} zurück.
+    if duration_min == 0:
+        return {sid: points[-1] for sid, points in result_map.items() if points}
+    return result_map
+
+def correlate_tawes(initial_history=False):
     """360° Korrelation: Upstream-Stationen → Regen-ETA, Windtrend, Gewitter-Signal."""
     global TAWES_BUFFER
     nearby = find_nearby_stations()
     if not nearby:
+        log.info('TAWES: Keine Stationen im konfigurierten Umkreis gefunden')
         return {}
 
-    # Messdaten abrufen und Ring-Buffer füllen
+    # Wenn initial_history=True, füllen wir den Puffer mit den letzten 60 Minuten
+    if initial_history:
+        log.info('TAWES: Initialisiere Puffer mit historischen Daten (60min)...')
+        hist_data = fetch_tawes_data([st['id'] for st in nearby], duration_min=60)
+        for sid, points in hist_data.items():
+            if sid not in TAWES_BUFFER: TAWES_BUFFER[sid] = deque(maxlen=12)
+            for p in points: TAWES_BUFFER[sid].append(p)
+        log.info(f'TAWES: Puffer für {len(hist_data)} Stationen gefüllt')
+
+    # Aktuelle Messdaten abrufen
     raw_data = fetch_tawes_data([st['id'] for st in nearby])
 
-    # Logging: wie viele Stationen haben welche Sensoren (erklärt warum viele "–" zeigen)
+    # API-Status: kein Ergebnis obwohl Stationen vorhanden → echter API-Fehler
+    requested_count = min(len(nearby), TAWES_MAX_STATIONS)
+    api_ok = len(raw_data) > 0 or len(nearby) == 0
+
+    if not api_ok:
+        log.error(f'TAWES API: Keine Daten zurück ({requested_count} Stationen angefragt)')
+        return {'_api_ok': False}
+    
     mit_ff  = sum(1 for v in raw_data.values() if v.get('FF')  is not None)
     mit_ffx = sum(1 for v in raw_data.values() if v.get('FFX') is not None)
     mit_rr  = sum(1 for v in raw_data.values() if v.get('RR')  is not None)
-    log.info(f'TAWES API: {len(raw_data)}/{len(nearby)} Stationen erreicht | '
-             f'Wind-Sensoren: {mit_ff} | Böen-Sensoren: {mit_ffx} | Regen-Sensoren: {mit_rr}')
-    # ID-Match-Diagnose: wie viele nearby Stationen wurden tatsächlich in raw_data gefunden
-    found_in_raw = sum(1 for st in nearby[:25] if st['id'] in raw_data)
-    requested_count = min(len(nearby), 25)
-    if found_in_raw < requested_count:
-        pct = found_in_raw * 100 // requested_count
-        if pct < 50:
-            log.warning(f'TAWES ID-Mismatch: nur {found_in_raw}/{requested_count} Stationen gefunden ({pct}%)! '
-                        f'Station-Cache vermutlich veraltet – Cache löschen: Einstellungen → TAWES → Cache neu laden')
-        else:
-            log.debug(f'TAWES: {found_in_raw}/{requested_count} Stationen per ID gefunden')
-    if mit_ffx == 0 and found_in_raw == requested_count:
-        log.info('TAWES: Keine Böen-Sensoren in diesem Gebiet aktiv (TAWES-Netzrealität – nur Klimastationen ohne Anemometer)')
-    elif mit_ffx > 0 and mit_ffx < len(raw_data) // 3:
-        log.info(f'TAWES: {mit_ffx} von {len(raw_data)} Stationen haben Böen-Sensoren – typisch für das TAWES-Klimastations-Netz')
-    for sid, v in raw_data.items():
-        sname = next((s['name'] for s in nearby if s['id'] == sid), sid)
-        log.debug(f'  Station {sname}: FF={v.get("FF")} m/s, FFX={v.get("FFX")} m/s, '
-                  f'RR={v.get("RR")} mm, DD={v.get("DD")}°, P={v.get("P")} hPa, RF={v.get("RF")}%')
+    log.info(f'TAWES API: {len(raw_data)}/{len(nearby)} Stationen erreicht | Sensors: FF:{mit_ff} FFX:{mit_ffx} RR:{mit_rr}')
 
     for sid, vals in raw_data.items():
         if sid not in TAWES_BUFFER:
             TAWES_BUFFER[sid] = deque(maxlen=12)
         TAWES_BUFFER[sid].append(vals)
 
-    # Schritt 1: Dominante Windrichtung – vektorbasiert, gewichtet nach FF
-    # (Median schlägt bei Nordwind fehl: 350°+10° → Median 180° statt 0°)
+    def _disp_val(sid, key, mult=1.0):
+        cur = raw_data.get(sid, {}).get(key)
+        if cur is not None:
+            return round(cur * mult, 1)
+        # Wenn aktuell null, in Puffer suchen (bis zu 30min zurück)
+        for entry in reversed(list(TAWES_BUFFER.get(sid, []))[-3:]):
+            v = entry.get(key)
+            if v is not None:
+                return round(v * mult, 1)
+        return None
+
+    # Schritt 1: Dominante Windrichtung
     sin_sum = cos_sum = 0.0; wr_count = 0
     for sid in raw_data:
         ff = raw_data[sid].get('FF'); dd = raw_data[sid].get('DD')
@@ -532,20 +624,19 @@ def correlate_tawes():
             sin_sum += math.sin(rad) * ff
             cos_sum += math.cos(rad) * ff
             wr_count += 1
-    dd_vals = [wr_count]  # Nur noch als bool-Check ob Stationen mit Wind vorhanden
     if wr_count > 0:
         dominante_wr = (math.degrees(math.atan2(sin_sum, cos_sum)) + 360) % 360
         dominante_wr_name = _bearing_to_name(dominante_wr)
     else:
         dominante_wr = 0.0; dominante_wr_name = '–'
 
-    # Schritt 2: Upstream-Stationen dynamisch bestimmen (±70° Toleranz)
+    # Schritt 2: Upstream-Stationen bestimmen
     upstream_list = []
     stations_mit_daten = []
     for st in nearby:
         sid = st['id']
-        if sid not in raw_data: continue
-        vals = raw_data[sid]
+        if sid not in TAWES_BUFFER: continue
+        vals = list(TAWES_BUFFER[sid])[-1] # Letzter bekannter Punkt
         ist_upstream = False
         if wr_count > 0:
             bearing_home = (st['bearing'] + 180) % 360
@@ -553,165 +644,172 @@ def correlate_tawes():
             diff = abs(wind_to - bearing_home)
             diff = min(diff, 360 - diff)
             ist_upstream = diff < 70
-        ff_kmh  = round(vals['FF'] * 3.6, 1)  if vals.get('FF')  is not None else None
-        ffx_kmh = round(vals['FFX'] * 3.6, 1) if vals.get('FFX') is not None else None
-        entry = dict(st, ist_upstream=ist_upstream, RR=vals.get('RR'), FF_kmh=ff_kmh,
+        
+        # Display-Werte mit Puffer-Fallback
+        ff_kmh  = _disp_val(sid, 'FF',  mult=3.6)
+        ffx_kmh = _disp_val(sid, 'FFX', mult=3.6)
+        rr_raw  = _disp_val(sid, 'RR')
+        
+        entry = dict(st, ist_upstream=ist_upstream, RR=rr_raw, FF_kmh=ff_kmh,
                      FFX_kmh=ffx_kmh, DD=vals.get('DD'), P=vals.get('P'), RF=vals.get('RF'))
-        stations_mit_daten.append(entry)
         if ist_upstream:
             upstream_list.append(entry)
+        stations_mit_daten.append(entry)
 
     # Upstream Wind & Sturm
-    wind_upstream_kmh = 0.0; sturm_upstream = 0
+    wind_upstream_kmh = 0.0; sturm_upstream = 0; alpine_upstream_count = 0
     if upstream_list:
-        def _fmt_upstream(s):
-            ffx = s.get('FFX_kmh')
-            return f'{s["name"]} ({s["dist_km"]}km, FFX={f"{ffx:.0f}" if ffx is not None else "–"}km/h)'
-        log.info(f'TAWES Upstream ({len(upstream_list)} Stationen aus {dominante_wr_name} {dominante_wr:.0f}°): '
-                 + ', '.join(_fmt_upstream(s) for s in upstream_list[:6]))
-        ffx_vals = [s['FFX_kmh'] for s in upstream_list if s.get('FFX_kmh') is not None]
+        ffx_vals = []; ffx_vals_alpin = []
+        for _s in upstream_list:
+            if _s.get('FFX_kmh') is None: continue
+            if TAWES_MAX_UPSTREAM_HOEHE > 0 and _s.get('alt', 0) > TAWES_MAX_UPSTREAM_HOEHE:
+                ffx_vals_alpin.append(_s['FFX_kmh'])
+            else:
+                ffx_vals.append(_s['FFX_kmh'])
+        alpine_upstream_count = len(ffx_vals_alpin)
         if ffx_vals:
             wind_upstream_kmh = round(max(ffx_vals), 1)
-            sturm_upstream = int(wind_upstream_kmh >= BOEN_ALARM)
+            alarm_count = sum(1 for v in ffx_vals if v >= BOEN_ALARM)
+            min_bestaetigt = max(2, round(len(ffx_vals) * TAWES_MIN_ALARM_PCT / 100))
+            sturm_upstream = int(len(ffx_vals) >= 2 and alarm_count >= min_bestaetigt)
 
-    # Schritt 3–4: Regen-Welle aus Buffer → ETA
-    regen_upstream = 0; regen_eta_min = -1; front_speed_kmh = 0.0
-    regen_start = {}  # sid → wie viele 10min-Steps zurück (0 = aktuell)
+    # Regen-ETA
+    regen_upstream = 0; regen_eta_min = -1; front_speed_kmh = 0.0; regen_upstream_mm = 0.0
+    regen_start = {}
     for st in upstream_list:
         sid = st['id']
         buf = list(TAWES_BUFFER.get(sid, []))
-        for i in range(len(buf) - 1, -1, -1):
-            rr = buf[i].get('RR')
-            if rr is not None and rr > 0.1:
-                regen_start[sid] = -(len(buf) - 1 - i)
-                regen_upstream = 1
-                break
-
-    # Max-Regenintensität upstream in mm/h – für Alarm-Schwelle in build_alarm.
-    # TAWES RR = mm/10min → ×6 ergibt mm/h (damit REGEN_ALARM-Vergleich korrekt ist).
-    regen_upstream_mm = 0.0
+        for i in range(len(buf)-1, max(-1, len(buf)-4), -1):
+            if (buf[i].get('RR') or 0) > 0.1:
+                regen_start[sid] = -(len(buf)-1-i); regen_upstream = 1; break
+    
     if regen_upstream:
-        for sid in regen_start:
-            buf = list(TAWES_BUFFER.get(sid, []))
-            recent = buf[-3:] if len(buf) >= 3 else buf  # max. letzten 30 min
-            max_rr = max((b.get('RR') or 0 for b in recent), default=0)
-            if max_rr > regen_upstream_mm:
-                regen_upstream_mm = max_rr
-        regen_upstream_mm = round(regen_upstream_mm * 6, 1)  # mm/10min → mm/h
+        upstream_mit_daten = len(upstream_list)
+        min_regen_bestaetigt = max(1, round(upstream_mit_daten * TAWES_MIN_ALARM_PCT / 100))
+        if len(regen_start) >= min_regen_bestaetigt:
+            for sid in regen_start:
+                max_rr = max((b.get('RR') or 0 for b in list(TAWES_BUFFER[sid])[-3:]), default=0)
+                if max_rr > regen_upstream_mm: regen_upstream_mm = max_rr
+            regen_upstream_mm = round(regen_upstream_mm * 6, 1)
 
-    upstream_mit_regen = sorted([st for st in upstream_list if st['id'] in regen_start],
-                                 key=lambda x: x['dist_km'], reverse=True)
+    # Lokal-Regen
+    regen_lokal = 0; regen_lokal_mm = 0.0; regen_lokal_station = ''
+    REGEN_LOKAL_KM = 40.0; REGEN_LOKAL_ALARM_KM = TAWES_REGEN_LOKAL_KM
+    lokal_mit_regen = [st for st in stations_mit_daten if st['dist_km'] <= REGEN_LOKAL_KM and (st.get('RR') or 0) > 0.1]
+    if lokal_mit_regen:
+        regen_lokal = 1
+        lokal_alarm = [st for st in lokal_mit_regen if st['dist_km'] <= REGEN_LOKAL_ALARM_KM]
+        if lokal_alarm:
+            best = max(lokal_alarm, key=lambda s: s.get('RR') or 0)
+            regen_lokal_mm = round((best.get('RR') or 0) * 6, 1)
+            regen_lokal_station = f'{best["name"]} ({best["dist_km"]:.0f}km) {regen_lokal_mm}mm/h'
+
+    # Front-Geschwindigkeit & ETA
+    upstream_mit_regen = sorted([st for st in upstream_list if st['id'] in regen_start], key=lambda x: x['dist_km'], reverse=True)
     if len(upstream_mit_regen) >= 2:
         speeds = []
-        for i in range(len(upstream_mit_regen) - 1):
-            far, near = upstream_mit_regen[i], upstream_mit_regen[i+1]
-            dist_diff = far['dist_km'] - near['dist_km']
-            time_diff = (regen_start[near['id']] - regen_start[far['id']]) * 10
-            if time_diff > 0 and dist_diff > 0:
-                speed = dist_diff / time_diff * 60
-                if 10 < speed < 180: speeds.append(speed)
-        if speeds: front_speed_kmh = round(sum(speeds) / len(speeds), 1)
-
+        for i in range(len(upstream_mit_regen)-1):
+            f, n = upstream_mit_regen[i], upstream_mit_regen[i+1]
+            dt = (regen_start[n['id']] - regen_start[f['id']]) * 10
+            if dt > 0:
+                s = (f['dist_km'] - n['dist_km']) / dt * 60
+                if 10 < s < 180: speeds.append(s)
+        if speeds: front_speed_kmh = round(sum(speeds)/len(speeds), 1)
+    
     if regen_upstream and front_speed_kmh > 0:
-        ns_regen = sorted(upstream_mit_regen, key=lambda x: x['dist_km'])
-        if ns_regen:
-            ns = ns_regen[0]
-            elapsed_min = abs(regen_start[ns['id']]) * 10
-            remaining_km = ns['dist_km'] - (elapsed_min / 60 * front_speed_kmh)
-            regen_eta_min = int(remaining_km / front_speed_kmh * 60) if remaining_km > 0 else 0
+        ns = sorted(upstream_mit_regen, key=lambda x: x['dist_km'])[0]
+        rem_km = ns['dist_km'] - (abs(regen_start[ns['id']])*10/60 * front_speed_kmh)
+        regen_eta_min = max(0, int(rem_km / front_speed_kmh * 60))
 
-    # Schritt 5: Wind-Trend (nächste Upstream-Station, letzten 6 Buffer-Einträge)
-    wind_trend = 0
+    # Wind-Kaskade
+    wind_kaskade = 0; wind_kaskade_eta_min = -1; wind_kaskade_speed_kmh = 0.0; wind_kaskade_stationen = []
+    wind_start = {}
+    upstream_tal = [s for s in upstream_list if not (TAWES_MAX_UPSTREAM_HOEHE > 0 and s.get('alt', 0) > TAWES_MAX_UPSTREAM_HOEHE)]
+    for st in upstream_tal:
+        buf = list(TAWES_BUFFER[st['id']])
+        for i in range(len(buf)-1, max(-1, len(buf)-7), -1):
+            if (buf[i].get('FFX') or 0) * 3.6 >= BOEN_ALARM:
+                wind_start[st['id']] = -(len(buf)-1-i); break
+    
+    if len(wind_start) >= 2:
+        ws_sorted = sorted([st for st in upstream_tal if st['id'] in wind_start], key=lambda x: x['dist_km'], reverse=True)
+        if all(wind_start[ws_sorted[i]['id']] <= wind_start[ws_sorted[i+1]['id']] for i in range(len(ws_sorted)-1)):
+            wind_kaskade = 1; wind_kaskade_stationen = ws_sorted
+            f, n = ws_sorted[0], ws_sorted[-1]
+            dt = (wind_start[n['id']] - wind_start[f['id']]) * 10
+            if dt > 0:
+                s = (f['dist_km'] - n['dist_km']) / dt * 60
+                if 10 < s < 200:
+                    wind_kaskade_speed_kmh = round(s, 1)
+                    wind_kaskade_eta_min = max(0, int(n['dist_km']/s*60 - abs(wind_start[n['id']])*10))
+
+    # Trends & Signale
     naechste_upstream = upstream_list[0] if upstream_list else (nearby[0] if nearby else None)
+    wind_trend = 0; gewitter_signal = 0; druck_trend = 0.0; konfidenz = 0
     if naechste_upstream:
         buf = list(TAWES_BUFFER.get(naechste_upstream['id'], []))
-        ffx_raw = [b.get('FFX') for b in buf[-6:]]
-        slope = _linreg_slope([(v * 3.6 if v is not None else None) for v in ffx_raw])
-        wind_trend = 1 if slope > 1.0 else (-1 if slope < -1.0 else 0)
-
-    # Schritt 6: Konfidenz
-    konfidenz = 0
+        if len(buf) >= 4:
+            ffx_r = [(b.get('FFX')*3.6 if b.get('FFX') is not None else None) for b in buf[-6:]]
+            wind_trend = 1 if _linreg_slope(ffx_r) > 1.0 else (-1 if _linreg_slope(ffx_r) < -1.0 else 0)
+            druck_trend = round(_linreg_slope([b.get('P') for b in buf[-6:]]), 2)
+            if druck_trend < -0.5 and (naechste_upstream.get('RF') or 0) > 85:
+                gewitter_signal = 2 if _linreg_slope(ffx_r) > 3.0 else 1
+    
     if len(upstream_mit_regen) >= 2: konfidenz += 40
     if 10 <= front_speed_kmh <= 150: konfidenz += 30
-    if naechste_upstream and naechste_upstream.get('DD') is not None and wr_count > 0:
-        diff = abs(naechste_upstream['DD'] - dominante_wr)
-        if min(diff, 360 - diff) < 45: konfidenz += 20
     if wind_trend == 1: konfidenz += 10
 
-    # Schritt 7: Gewitter-Signal (Druckabfall + Feuchte + FFX-Anstieg)
-    # Level 1 = Gewittergefahr, Level 2 = akute Gefahr (zusätzlich Böen-Anstieg)
-    gewitter_signal = 0; druck_trend = 0.0
-    if naechste_upstream:
-        buf = list(TAWES_BUFFER.get(naechste_upstream['id'], []))
-        p_raw     = [b.get('P')   for b in buf[-6:]]
-        ffx_raw_g = [b.get('FFX') for b in buf[-6:]]
-        druck_trend = round(_linreg_slope(p_raw), 2)
-        rf = naechste_upstream.get('RF')
-        if druck_trend < -0.5 and rf is not None and rf > 85:
-            gewitter_signal = 1
-            # Level 2: zusätzlich starker FFX-Anstieg upstream
-            ffx_slope = _linreg_slope([(v * 3.6 if v is not None else None) for v in ffx_raw_g])
-            if ffx_slope > 3.0:
-                gewitter_signal = 2
-
-    # Nächste Station Metadaten
-    ns_name = naechste_upstream['name'] if naechste_upstream else '–'
-    ns_km   = naechste_upstream['dist_km'] if naechste_upstream else 0
-    ns_richt = naechste_upstream['bearing_name'] if naechste_upstream else '–'
-
-    # Hilfsfunktion: Wert auf nächstes Vielfaches von n runden (verhindert Dedup-Bypass durch Kleinstschwankungen)
-    def _rnd(v, n): return round(float(v) / n) * n
-
-    # Notification – gerundete Werte damit sich der Text nicht bei jeder Kleinstschwankung ändert
     notif = ''
-    if gewitter_signal:
-        rf_val = (naechste_upstream or {}).get('RF', 0) or 0
-        prefix = '🔴 AKUTE GEWITTERGEFAHR' if gewitter_signal == 2 else '⚡ Gewittergefahr'
-        notif = f'{prefix} | Druck {abs(druck_trend):.1f} hPa/10min + {rf_val:.0f}% Feuchte'
-    elif sturm_upstream:
-        # Ort + gerundeter Windwert – klar dass es eine Upstream-Station ist, nicht der lokale Wind
-        trend_str = f' | steigend' if wind_trend > 0 else ''
-        wind_r = _rnd(wind_upstream_kmh, 5)
-        notif = f'💨 Sturmböen {ns_name} ({ns_km}km): {wind_r} km/h{trend_str}'
-    elif regen_upstream and konfidenz >= 50:
-        # ETA auf 5 min runden – verhindert Notification-Spam durch Countdown
-        if regen_eta_min >= 0:
-            eta_r = _rnd(regen_eta_min, 5)
-            notif = f'🌧️ Regenfront ~{eta_r}min | {_rnd(front_speed_kmh, 5)}km/h aus {dominante_wr_name} | {konfidenz}% Konfidenz'
-        else:
-            notif = f'🌧️ Regen bei {ns_name} ({ns_km}km) | aus {dominante_wr_name} | Ankunft unbekannt'
+    if gewitter_signal: notif = f'{"🔴 AKUTE GEWITTERGEFAHR" if gewitter_signal==2 else "⚡ Gewittergefahr"} | Druck {abs(druck_trend):.1f} hPa/10min'
+    elif sturm_upstream: notif = f'💨 Sturmböen {naechste_upstream["name"]} ({naechste_upstream["dist_km"]}km): {round(wind_upstream_kmh/5)*5} km/h'
+    elif wind_kaskade: notif = f'💨 Sturmfront aus {dominante_wr_name} | ETA ~{round(wind_kaskade_eta_min/5)*5}min'
+    elif regen_upstream:
+        if konfidenz >= 50: notif = f'🌧️ Regenfront ~{round(regen_eta_min/5)*5}min | {konfidenz}%'
+        else: notif = f'🌧️ Regen bei {naechste_upstream["name"]} ({naechste_upstream["dist_km"]}km)'
+    elif regen_lokal: notif = f'🌧️ Lokal-Regen: {regen_lokal_station or f"{regen_lokal_mm} mm/h"}'
 
     return {
-        'letztes_update':              datetime.now().astimezone().strftime('%d.%m.%Y %H:%M:%S'),
-        'dominante_windrichtung':      round(dominante_wr, 1),
-        'dominante_windrichtung_name': dominante_wr_name,
-        'wind_upstream_kmh':           wind_upstream_kmh,
-        'wind_trend':                  wind_trend,
-        'sturm_upstream':              sturm_upstream,
-        'regen_upstream':              regen_upstream,
-        'regen_upstream_mm':           regen_upstream_mm,
-        'regen_eta_min':               regen_eta_min,
-        'regen_konfidenz':             konfidenz,
-        'front_speed_kmh':             front_speed_kmh,
-        'druck_trend':                 druck_trend,
-        'gewitter_signal':             gewitter_signal,
-        'upstream_aktiv':              len(upstream_list),
-        'naechste_station_name':       ns_name,
-        'naechste_station_km':         ns_km,
-        'naechste_station_richtung':   ns_richt,
+        'letztes_update': datetime.now().astimezone().strftime('%d.%m.%Y %H:%M:%S'),
+        'dominante_windrichtung': round(dominante_wr, 1), 'dominante_windrichtung_name': dominante_wr_name,
+        'wind_upstream_kmh': wind_upstream_kmh, 'wind_trend': wind_trend, 'sturm_upstream': sturm_upstream,
+        'regen_upstream': regen_upstream, 'regen_upstream_mm': regen_upstream_mm, 'regen_eta_min': regen_eta_min,
+        'regen_konfidenz': konfidenz, 'front_speed_kmh': front_speed_kmh, 'druck_trend': druck_trend,
+        'gewitter_signal': gewitter_signal, 'upstream_aktiv': len(upstream_list), 'wind_kaskade': wind_kaskade,
+        'wind_kaskade_eta_min':        wind_kaskade_eta_min,
+        'wind_kaskade_speed_kmh':      wind_kaskade_speed_kmh,
+        'regen_lokal':                 regen_lokal,
+        'regen_lokal_mm':              regen_lokal_mm,
+        'regen_lokal_station':         regen_lokal_station,
+        'alpine_upstream':             alpine_upstream_count,
+        'naechste_station_name':       naechste_upstream['name'] if naechste_upstream else '–',
+        'naechste_station_km':         naechste_upstream['dist_km'] if naechste_upstream else 0,
+        'naechste_station_richtung':   naechste_upstream['bearing_name'] if naechste_upstream else '–',
         'notification':                notif,
         'alle_stationen':              stations_mit_daten,
+        '_api_ok':                     True,
     }
+
+def _cleanup_tawes_buffer(nearby_ids_set):
+    """Buffer-Einträge für nicht mehr relevante Stationen entfernen (Windrichtung, Radius geändert)."""
+    stale = [sid for sid in list(TAWES_BUFFER.keys()) if sid not in nearby_ids_set]
+    for sid in stale:
+        del TAWES_BUFFER[sid]
+    if stale:
+        log.debug(f'TAWES Buffer: {len(stale)} nicht mehr relevante Station(en) bereinigt')
 
 def publish_tawes(tawes):
     """TAWES MQTT Topics publizieren."""
     if not tawes: return
     for k in ['dominante_windrichtung','dominante_windrichtung_name','wind_upstream_kmh',
-              'wind_trend','sturm_upstream','regen_upstream','regen_upstream_mm','regen_eta_min',
-              'regen_konfidenz','front_speed_kmh','druck_trend','gewitter_signal','upstream_aktiv']:
+              'wind_trend','sturm_upstream','wind_kaskade','wind_kaskade_eta_min','wind_kaskade_speed_kmh',
+              'regen_upstream','regen_upstream_mm','regen_eta_min',
+              'regen_konfidenz','front_speed_kmh','druck_trend','gewitter_signal','upstream_aktiv',
+              'regen_lokal','regen_lokal_mm','alpine_upstream',
+              'regen_lokal_station']:
         publish(f'tawes/{k}', tawes.get(k, 0))
     publish('tawes/stationen_anzahl', len(tawes.get('alle_stationen', [])))
     publish('tawes/letztes_update', tawes.get('letztes_update', ''))
+    publish('tawes/api_ok', int(tawes.get('_api_ok', True)))
     ns = f'{tawes.get("naechste_station_name","–")} ({tawes.get("naechste_station_km",0)}km, {tawes.get("naechste_station_richtung","–")})'
     publish('tawes/naechste_station', ns)
     # notification/tawes wird dedupliziert in publish_all() publiziert
@@ -721,8 +819,9 @@ def publish_tawes(tawes):
 # ---------------------------------------------------------------------------
 def build_alarm(zamg, inca, tawes, akut):
     """Kombiniert ZAMG + INCA + TAWES zu einem einheitlichen Alarm-Dict.
-    Level: 0=ruhig, 1=Vorsicht (Gelb/Schwelle), 2=Warnung (Orange/überschritten), 3=Extrem (Rot/Lila)
-    ZAMG-Stufe mappt direkt: Gelb→1, Orange→2, Rot/Lila→3. aktiv-Flag ändert das Level nicht."""
+    Level: 0=ruhig, 1=Vorsicht (Gelb/1×Schwelle), 2=Warnung (Orange/2×Schwelle), 3=Extrem (Rot/Lila/3×Schwelle)
+    ZAMG-Stufe mappt direkt: Gelb→1, Orange→2, Rot/Lila→3.
+    INCA/TAWES: 1×Schwelle→1, 2×→2, 3×→3."""
 
     # Gewitter: ZAMG Gelb→1, Orange→2, Rot/Lila→3; TAWES Signal 0/1/2 direkt verwendbar
     g_stufe = zamg.get('gewitter', {}).get('stufe', 0)
@@ -733,32 +832,80 @@ def build_alarm(zamg, inca, tawes, akut):
     gewitter = max(gewitter, tawes.get('gewitter_signal', 0))  # TAWES: 0=kein, 1=möglich, 2=akut
     if akut: gewitter = max(gewitter, 2)
 
-    # Wind: ZAMG Gelb→1, Orange→2, Rot/Lila→3; INCA/TAWES nur bei >= BOEN_ALARM-Schwelle
+    # Wind: ZAMG Gelb→1, Orange→2, Rot/Lila→3
+    # INCA fx_max_60min / TAWES upstream_kmh: 1×BOEN_ALARM→1, 2×→2, 3×→3
     w_stufe = zamg.get('wind', {}).get('stufe', 0)
     if w_stufe >= 3:   wind = 3
     elif w_stufe == 2: wind = 2
     elif w_stufe == 1: wind = 1
     else:              wind = 0
-    if inca.get('bald_sturm_30'):   wind = max(wind, 2)  # Böen >= BOEN_ALARM in 30min
-    elif inca.get('bald_sturm_60'): wind = max(wind, 1)  # Böen >= BOEN_ALARM in 60min
-    tawes_wind = float(tawes.get('wind_upstream_kmh', 0) or 0)
-    if tawes_wind >= BOEN_ALARM * 2.0: wind = max(wind, 2)  # Doppelte Schwelle upstream
-    elif tawes_wind >= BOEN_ALARM:     wind = max(wind, 1)  # Schwelle upstream erreicht
+    wind_quelle = 'ZAMG' if wind > 0 else '–'
+    fx60 = float(inca.get('fx_max_60min', 0) or 0)
+    if fx60 >= BOEN_ALARM * 3:
+        if max(wind, 3) > wind: wind_quelle = f'INCA ({fx60}km/h)'
+        wind = max(wind, 3)
+    elif fx60 >= BOEN_ALARM * 2:
+        if max(wind, 2) > wind: wind_quelle = f'INCA ({fx60}km/h)'
+        wind = max(wind, 2)
+    elif fx60 >= BOEN_ALARM:
+        if max(wind, 1) > wind: wind_quelle = f'INCA ({fx60}km/h)'
+        wind = max(wind, 1)
+    # TAWES Wind: Konsens (sturm_upstream=1) MUSS bestätigt sein.
+    if tawes.get('sturm_upstream', 0):
+        tawes_wind = float(tawes.get('wind_upstream_kmh', 0) or 0)
+        if tawes_wind >= BOEN_ALARM * 3:
+            if max(wind, 3) > wind: wind_quelle = f'TAWES_STURM ({tawes_wind}km/h)'
+            wind = max(wind, 3)
+        elif tawes_wind >= BOEN_ALARM * 2:
+            if max(wind, 2) > wind: wind_quelle = f'TAWES_STURM ({tawes_wind}km/h)'
+            wind = max(wind, 2)
+        elif tawes_wind >= BOEN_ALARM:
+            if max(wind, 1) > wind: wind_quelle = f'TAWES_STURM ({tawes_wind}km/h)'
+            wind = max(wind, 1)
+    # Wind-Kaskade ohne Konsens → Level 1 (Vorsicht / Vorwarnung)
+    elif tawes.get('wind_kaskade', 0):
+        if max(wind, 1) > wind: wind_quelle = 'TAWES_KASKADE'
+        wind = max(wind, 1)
 
-    # Regen: ZAMG Gelb→1, Orange/höher→2; INCA nur bei >= REGEN_ALARM; TAWES Regenfront
-    # bald_regen und rr < REGEN_ALARM absichtlich nicht verwendet – zu sensibel für Nieselregen
+    # Regen: ZAMG Gelb→1, Orange→2, Rot/Lila→3
+    # INCA rr_jetzt (mm/h) / TAWES upstream_mm (mm/h): 1×REGEN_ALARM→1, 2×→2, 3×→3
     r_stufe = zamg.get('regen', {}).get('stufe', 0)
-    if r_stufe >= 2:   regen = 2
+    if r_stufe >= 3:   regen = 3
+    elif r_stufe == 2: regen = 2
     elif r_stufe == 1: regen = 1
     else:              regen = 0
-    if inca.get('regen_alarm'):  regen = max(regen, 2)  # Aktuelle Rate >= REGEN_ALARM mm/h
-    if tawes.get('regen_upstream'):
-        eta = tawes.get('regen_eta_min', -1)
-        upstream_mm = float(tawes.get('regen_upstream_mm', 0) or 0)
-        # Nur alarmieren wenn Upstream-Intensität die Schwelle erreicht (REGEN_ALARM/3).
-        # upstream_mm=0 → kein aktueller Regen (oder Regen nur im alten Buffer) → kein Alarm.
-        if upstream_mm >= REGEN_ALARM / 3.0:
-            regen = max(regen, 2 if 0 <= eta <= 30 else 1)
+    regen_quelle = 'ZAMG' if regen > 0 else '–'
+    rr = float(inca.get('rr_jetzt', 0) or 0)
+    if rr >= REGEN_ALARM * 3:
+        if max(regen, 3) > regen: regen_quelle = f'INCA ({rr}mm/h)'
+        regen = max(regen, 3)
+    elif rr >= REGEN_ALARM * 2:
+        if max(regen, 2) > regen: regen_quelle = f'INCA ({rr}mm/h)'
+        regen = max(regen, 2)
+    elif rr >= REGEN_ALARM:
+        if max(regen, 1) > regen: regen_quelle = f'INCA ({rr}mm/h)'
+        regen = max(regen, 1)
+    upstream_mm = float(tawes.get('regen_upstream_mm', 0) or 0)
+    if upstream_mm >= REGEN_ALARM * 3:
+        if max(regen, 3) > regen: regen_quelle = f'TAWES_UPSTREAM ({upstream_mm}mm/h)'
+        regen = max(regen, 3)
+    elif upstream_mm >= REGEN_ALARM * 2:
+        if max(regen, 2) > regen: regen_quelle = f'TAWES_UPSTREAM ({upstream_mm}mm/h)'
+        regen = max(regen, 2)
+    elif upstream_mm >= REGEN_ALARM:
+        if max(regen, 1) > regen: regen_quelle = f'TAWES_UPSTREAM ({upstream_mm}mm/h)'
+        regen = max(regen, 1)
+    lokal_mm = float(tawes.get('regen_lokal_mm', 0) or 0)
+    lokal_station = tawes.get('regen_lokal_station', '')
+    if lokal_mm >= REGEN_ALARM * 3:
+        if max(regen, 3) > regen: regen_quelle = f'TAWES_LOKAL ({lokal_station or lokal_mm}mm/h)'
+        regen = max(regen, 3)
+    elif lokal_mm >= REGEN_ALARM * 2:
+        if max(regen, 2) > regen: regen_quelle = f'TAWES_LOKAL ({lokal_station or lokal_mm}mm/h)'
+        regen = max(regen, 2)
+    elif lokal_mm >= REGEN_ALARM:
+        if max(regen, 1) > regen: regen_quelle = f'TAWES_LOKAL ({lokal_station or lokal_mm}mm/h)'
+        regen = max(regen, 1)
 
     # Hagel: ZAMG Gelb→1, Orange/höher→2; INCA bald_hagel/graupel→1
     h_stufe = zamg.get('hagel', {}).get('stufe', 0)
@@ -782,7 +929,6 @@ def build_alarm(zamg, inca, tawes, akut):
     all_types = list(WARN_TYPES.values()) + ['hagel']
     max_stufe = max((zamg.get(t, {}).get('stufe', 0) for t in all_types), default=0)
 
-    # Zusammenfassung – Texte spiegeln neue Level-Semantik wider
     parts = []
     if gewitter >= 3:   parts.append('⚡ Gewitter EXTREM')
     elif gewitter == 2: parts.append('⚡ Gewitter Warnung')
@@ -792,7 +938,8 @@ def build_alarm(zamg, inca, tawes, akut):
     elif wind:          parts.append('💨 Wind Vorsicht')
     if hagel >= 2:      parts.append('🌨 Hagel Warnung')
     elif hagel:         parts.append('🌨 Hagelgefahr')
-    if regen >= 2:      parts.append('🌧 Starkregen')
+    if regen >= 3:      parts.append('🌧 Extremregen')
+    elif regen == 2:    parts.append('🌧 Starkregen')
     elif regen:         parts.append('🌧 Regen erwartet')
     if schnee >= 2:     parts.append('❄️ Schnee/Eis Warnung')
     elif schnee:        parts.append('❄️ Schnee/Eis möglich')
@@ -801,13 +948,17 @@ def build_alarm(zamg, inca, tawes, akut):
     return {
         'gewitter': gewitter, 'wind': wind, 'regen': regen,
         'hagel': hagel, 'schnee': schnee, 'gesamt': gesamt,
-        'stufe': int(max_stufe), 'zusammenfassung': zusammenfassung
+        'stufe': int(max_stufe), 'zusammenfassung': zusammenfassung,
+        'wind_quelle': wind_quelle, 'regen_quelle': regen_quelle,
     }
 
 def publish_alarm(alarm):
     for k in ['gewitter', 'wind', 'regen', 'hagel', 'schnee', 'gesamt', 'stufe']:
         publish(f'alarm/{k}', alarm.get(k, 0))
     publish('alarm/zusammenfassung', alarm.get('zusammenfassung', ''))
+    publish('alarm/entwarnung', alarm.get('entwarnung', 0))
+    publish('alarm/wind_quelle',  alarm.get('wind_quelle',  '–'))
+    publish('alarm/regen_quelle', alarm.get('regen_quelle', '–'))
 
 # ---------------------------------------------------------------------------
 # State
@@ -823,12 +974,17 @@ def load_state():
     return {}
 
 def save_state(data):
-    """Aktuellen Zustand in JSON-Datei speichern."""
+    """Aktuellen Zustand in JSON-Datei speichern – atomarer Write via .tmp Datei."""
     try:
-        with open(STATE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        tmp = STATE_FILE + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2, allow_nan=False)
+        os.replace(tmp, STATE_FILE)
     except Exception as e:
         log.warning(f'State speichern fehlgeschlagen: {e}')
+        try:
+            if os.path.exists(STATE_FILE + '.tmp'): os.remove(STATE_FILE + '.tmp')
+        except: pass
 
 # ---------------------------------------------------------------------------
 # MQTT publish + State save
@@ -850,56 +1006,82 @@ def publish_all(zamg, akut, inca, prev_ids, new_ids, status_msg, tawes=None, pre
         publish('inca/regen_alarm', inca.get('regen_alarm', 0))
     z_lines = [zamg[t]['notification'] for t in all_types if zamg.get(t,{}).get('stufe',0) >= MIN_STUFE and zamg[t]['notification']]
     if akut: z_lines.insert(0, L['akut_active'])
-    def _rnd_n(v, n): return round(float(v or 0) / n) * n  # Hilfsfunktion zum Runden
+    def _rnd_n(v, n): return round(float(v or 0) / n) * n
 
     i_lines = []
     if inca:
         if inca.get('bald_hagel'): i_lines.append(L['hagel_60'])
         elif inca.get('bald_graupel'): i_lines.append(L['graupel_60'])
-        # Wind: auf 5 km/h runden – sonst ändert sich der Text bei jeder Kleinstschwankung
         if inca.get('bald_sturm_30'):
             i_lines.append(L['sturm_30'].format(v=_rnd_n(inca["fx_max_30min"], 5)))
         elif inca.get('bald_sturm_60'):
             i_lines.append(L['sturm_60'].format(v=_rnd_n(inca["fx_max_60min"], 5)))
-        # Regen: bald_regen nur in Notification wenn REGEN_ALARM-Schwelle niedrig (≤ 2mm/h)
-        # oder wenn aktuell schon Regen >= Schwelle fällt. Verhindert Spam bei hoher Schwelle.
         m = inca.get('minuten_bis_regen', -1)
-        m_r = _rnd_n(m, 5) if m >= 0 else -1  # ETA auf 5 min runden
+        m_r = _rnd_n(m, 5) if m >= 0 else -1
         if inca.get('bald_regen') and (inca.get('regen_alarm') or REGEN_ALARM <= 2.0):
             i_lines.append(L['regen_in'].format(v=m_r))
         elif inca.get('rr_jetzt', 0) > 0:
             i_lines.append(L['regen_jetzt'].format(v=inca["rr_jetzt"]))
+        i_lines_hat_inhalt = bool(i_lines)
         if not i_lines: i_lines.append(L['kein_alarm'].format(v=_rnd_n(inca.get("fx_jetzt", 0), 1)))
+    else:
+        i_lines_hat_inhalt = False
     n_geo       = '\n'.join(z_lines) if z_lines else L['no_warns']
     n_inca      = '\n'.join(i_lines) if i_lines else L['no_warns']
     n_tawes_raw = (tawes or {}).get('notification', '')
-    n_tawes     = n_tawes_raw or L['no_warns']  # Fallback wenn keine aktive TAWES-Meldung
+    n_tawes     = n_tawes_raw or L['no_warns']
 
-    # Entwarnung: wenn letzte Runde Warnungen aktiv waren und jetzt keine mehr
     hatte_warn = prev.get('hatte_aktiv', False)
     if hatte_warn and not irgendwas and not z_lines:
         n_geo = L['entwarnung']
         log.info('ZAMG: Entwarnung – alle Wetterwarnungen aufgehoben')
 
-    # n_alle: nur aktive Meldungen (kein Fallback-Text aus den Einzelquellen)
-    n_alle = '\n──\n'.join(filter(None, [n_geo if (z_lines or n_geo == L['entwarnung']) else '', n_inca if i_lines else '', n_tawes_raw])) or n_inca
+    n_alle = '\n──\n'.join(filter(None, [
+        n_geo if (z_lines or n_geo == L['entwarnung']) else '',
+        n_inca if i_lines_hat_inhalt else '',
+        n_tawes_raw,
+    ])) or n_inca
 
-    # Notifications nur publizieren wenn sich Inhalt geändert hat (Deduplizierung)
-    if n_geo   != prev.get('_n_geo',   ''):  publish('notification/geosphere', n_geo)
-    if n_inca  != prev.get('_n_inca',  ''):  publish('notification/inca',      n_inca)
-    if n_tawes != prev.get('_n_tawes', ''):  publish('notification/tawes',     n_tawes)
-    if n_alle  != prev.get('_n_alle',  ''):  publish('notification/alle',      n_alle)
+    alarm = build_alarm(zamg, inca, tawes or {}, akut)
+    alarm_gesamt      = alarm.get('gesamt', 0)
+    prev_alarm_gesamt = prev.get('alarm', {}).get('gesamt', 0)
+    entwarnung_jetzt  = (prev_alarm_gesamt >= 1 and alarm_gesamt == 0)
+    alarm['entwarnung'] = 1 if entwarnung_jetzt else 0
+    if entwarnung_jetzt:
+        log.info(f'Alarm: Entwarnung – alarm/gesamt von {prev_alarm_gesamt} auf 0 gefallen')
+
+    if n_geo != prev.get('_n_geo', ''): publish('notification/geosphere', n_geo)
+    if alarm_gesamt >= 1:
+        if n_inca  != prev.get('_n_inca',  ''): publish('notification/inca',  n_inca)
+        if n_tawes != prev.get('_n_tawes', ''): publish('notification/tawes', n_tawes)
+        if n_alle  != prev.get('_n_alle',  ''): publish('notification/alle',  n_alle)
+    else:
+        n_inca  = ''
+        n_tawes = ''
+        n_alle  = L['entwarnung'] if entwarnung_jetzt else ''
+        publish('notification/inca',  n_inca)
+        publish('notification/tawes', n_tawes)
+        publish('notification/alle',  n_alle)
 
     now = datetime.now().astimezone(); ts_iso = now.strftime('%d.%m.%Y %H:%M:%S'); ts_epoch = int(now.timestamp())
-    # Separate Timestamps pro Datenquelle: nur aktualisieren wenn der Abruf erfolgreich war
     zamg_ts  = ts_iso  if zamg_ok  else (prev or {}).get('zamg_letztes_update',  '–')
     inca_ts  = ts_iso  if inca_ok  else (prev or {}).get('inca_letztes_update',  '–')
     tawes_ts = (tawes or {}).get('letztes_update', (prev or {}).get('tawes_letztes_update', '–'))
+    
     publish('letzter_abruf_datum', ts_iso); publish('letzter_abruf_epoch', ts_epoch)
+    publish('status/last_seen',    ts_epoch)  # Heartbeat-Topic
     publish('zamg/letzter_abruf',  zamg_ts)
     publish('inca/letzter_abruf',  inca_ts)
-    publish('status', L['status_ok'] if status_msg == 'OK' else L['status_err'].format(v=status_msg))
-    alarm = build_alarm(zamg, inca, tawes or {}, akut)
+    
+    # Status-Badge Text
+    display_status = L['status_ok'] if status_msg == 'OK' else L['status_err'].format(v=status_msg)
+    publish('status', display_status, retain=True)
+    
+    publish('status/zamg_ok',  int(zamg_ok))
+    publish('status/inca_ok',  int(inca_ok))
+    tawes_data_ok = bool(tawes and tawes.get('_api_ok', bool(tawes.get('alle_stationen'))))
+    publish('status/tawes_ok', int(tawes_data_ok))
+    
     publish_alarm(alarm)
     save_state({
         'last_warn_ids': new_ids, 'hatte_aktiv': bool(irgendwas), 'letztes_update': ts_iso,
@@ -914,59 +1096,76 @@ def publish_all(zamg, akut, inca, prev_ids, new_ids, status_msg, tawes=None, pre
 # Hauptloop
 # ---------------------------------------------------------------------------
 def run():
-    global _tawes_last_fetch
-    log.info(f'Unwetter4Lox v0.4.18 gestartet | {LAT},{LON} | Lang={LBLANG} | Interval={INTERVAL}s | ZAMG={ZAMG_ENABLED} INCA={INCA_ENABLED} TAWES={TAWES_ENABLED}')
+    global _tawes_last_fetch, _tawes_fehler_count
+    _tawes_fehler_count = 0
+    log.info(f'Unwetter4Lox v0.4.31 gestartet | {LAT},{LON} | Interval={INTERVAL}s | ZAMG={ZAMG_ENABLED} INCA={INCA_ENABLED} TAWES={TAWES_ENABLED}')
+    
+    # PID File schreiben
+    try:
+        with open(PID_FILE, 'w') as f: f.write(str(os.getpid()))
+    except Exception as e: log.warning(f'PID-File konnte nicht geschrieben werden: {e}')
+    
+    # TAWES Station-Cache beim Start löschen
+    try:
+        if os.path.exists(TAWES_CACHE_FILE):
+            os.remove(TAWES_CACHE_FILE)
+            log.info('TAWES: Station-Cache gelöscht – frischer API-Abruf beim ersten Lauf')
+    except Exception as e: log.warning(f'TAWES: Cache löschen fehlgeschlagen: {e}')
+    
     _tawes_last_fetch = 0
     while True:
         try:
+            loop_start = time.time()
             if not _mqtt_connected.is_set():
                 log.info('MQTT: Verbindungsaufbau...')
-                if mqtt_connect():
-                    log.info(f'MQTT: Verbunden mit {MQTT_BROKER}:{MQTT_PORT}')
-                else:
-                    log.warning(f'MQTT: Verbindung fehlgeschlagen ({MQTT_BROKER}:{MQTT_PORT}) – Daten werden nicht gesendet')
+                mqtt_connect()
+            
             prev = load_state(); prev_ids = prev.get('last_warn_ids', [])
             status, zamg, akut, new_ids, inca = 'OK', {}, 0, [], {}
             zamg_ok = False; inca_ok = False
+            
             if ZAMG_ENABLED:
-                log.debug('GeoSphere ZAMG: Abruf startet...')
                 zamg, akut, new_ids = fetch_zamg()
                 if zamg is None:
                     status, zamg = 'GeoSphere API Error', {}
-                    log.error('GeoSphere ZAMG: API-Fehler – keine Daten')
-                else:
-                    zamg_ok = True
-                    aktive = sum(1 for t in zamg.values() if t.get('stufe', 0) > 0)
-                    max_st = max((t.get('stufe', 0) for t in zamg.values()), default=0)
-                    log.info(f'GeoSphere ZAMG: OK | {aktive} Warntypen aktiv | max_stufe={max_st} | akut={akut}')
+                else: zamg_ok = True
+            
             if INCA_ENABLED:
-                log.debug('INCA Nowcast: Abruf startet...')
                 inca = fetch_inca()
                 if inca is None:
-                    status, inca = ('INCA Error' if status == 'OK' else status + ' & INCA Error'), {}
-                    log.error('INCA Nowcast: API-Fehler – keine Daten')
-                else:
-                    inca_ok = True
-                    log.info(f'INCA Nowcast: OK | Böen {inca.get("fx_max_60min",0)} km/h | '
-                             f'Regen {inca.get("rr_jetzt",0)} mm/h | ETA {inca.get("minuten_bis_regen",-1)} min | '
-                             f'Regen-Alarm={inca.get("regen_alarm",0)} (>={REGEN_ALARM} mm/h) | '
-                             f'Sturm-Alarm={inca.get("bald_sturm_60",0)} (>={BOEN_ALARM} km/h)')
-            # TAWES – nur alle 10min (480s Schwelle)
+                    status = 'INCA Error' if status == 'OK' else status + ' & INCA Error'
+                    inca = {}
+                else: inca_ok = True
+            
             tawes = prev.get('tawes', {})
             if TAWES_ENABLED and time.time() - _tawes_last_fetch > 480:
                 try:
-                    log.debug(f'TAWES 360°: Abruf startet (max {TAWES_MAX_KM} km Radius)...')
-                    tawes = correlate_tawes()
-                    publish_tawes(tawes)
-                    _tawes_last_fetch = time.time()
-                    log.info(f'TAWES 360°: OK | {len(tawes.get("alle_stationen",[]))} Stationen im Umkreis | '
-                             f'upstream={tawes.get("upstream_aktiv",0)} | regen_upstream={tawes.get("regen_upstream",0)} | '
-                             f'sturm_upstream={tawes.get("sturm_upstream",0)} | gewitter={tawes.get("gewitter_signal",0)}')
+                    new_tawes = correlate_tawes()
+                    if new_tawes.get('_api_ok', True) and new_tawes.get('alle_stationen') is not None:
+                        nearby_ids = {st['id'] for st in new_tawes.get('alle_stationen', [])}
+                        _cleanup_tawes_buffer(nearby_ids)
+                        tawes = new_tawes
+                        publish_tawes(tawes)
+                        _tawes_last_fetch = time.time()
+                        _tawes_fehler_count = 0
+                    else:
+                        _tawes_fehler_count += 1
+                        if _tawes_fehler_count >= 3:
+                            status = 'TAWES API Error' if status == 'OK' else status + ' & TAWES Error'
+                        _tawes_last_fetch = time.time() - 390
+                        publish('tawes/api_ok', 0)
                 except Exception as te:
-                    log.error(f'TAWES Fehler: {te}')
+                    _tawes_fehler_count += 1
+                    log.error(f'TAWES Ausnahme: {te}')
+            
             publish_all(zamg, akut, inca, prev_ids, new_ids, status, tawes, prev=prev, zamg_ok=zamg_ok, inca_ok=inca_ok)
-        except Exception as e: log.error(f'Hauptloop Fehler: {e}')
-        log.debug(f'Schlafen {INTERVAL}s bis zum nächsten Abruf...')
+            
+            duration = time.time() - loop_start
+            log.debug(f'Loop abgeschlossen in {duration:.1f}s. Schlafen {INTERVAL}s...')
+            
+        except Exception as e:
+            log.error(f'Hauptloop Fehler: {e}')
+            try: publish('status', L['status_err'].format(v=str(e)[:40]), retain=True)
+            except: pass
+            
         time.sleep(INTERVAL)
-
-if __name__ == '__main__': run()

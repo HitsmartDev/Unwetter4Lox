@@ -27,81 +27,108 @@ if ($action === 'geocode') {
     exit;
 }
 
-# Koordinaten vom Loxone Miniserver via LoxBerry-Config abrufen
+# Koordinaten vom Loxone Miniserver via LoxBerry-SDK abrufen
 if ($action === 'get_miniserver_coords') {
     header('Content-Type: application/json');
 
-    # LoxBerry general.json lesen – enthält Miniserver-Zugangsdaten
-    $gen_file = $lbhomedir . '/config/system/general.json';
-    $gen      = file_exists($gen_file) ? json_decode(file_get_contents($gen_file), true) : null;
-
-    if (!$gen) {
-        echo json_encode(['error' => 'LoxBerry general.json nicht gefunden oder lesbar.']);
-        exit;
+    # LoxBerry SDK-Funktion: liefert Miniserver-Array mit korrektem Transport, Port, FullURI
+    # FullURI-Format: transport://user:pass@ip:port  (HTTPS nutzt PortHttps, nicht Port)
+    $miniservers = [];
+    if (function_exists('LBSystem::get_miniservers') || method_exists('LBSystem', 'get_miniservers')) {
+        try { $miniservers = LBSystem::get_miniservers(); } catch (Exception $e) { $miniservers = []; }
     }
 
-    # Ersten konfigurierten Miniserver finden
-    $ms = null;
-    foreach (['Miniserver', 'miniserver'] as $key) {
-        if (!empty($gen[$key]) && is_array($gen[$key])) {
-            $ms = reset($gen[$key]);
-            break;
+    # Fallback: general.json direkt lesen wenn SDK-Funktion nicht verfügbar
+    if (empty($miniservers)) {
+        $gen_file = $lbhomedir . '/config/system/general.json';
+        $gen      = file_exists($gen_file) ? json_decode(file_get_contents($gen_file), true) : null;
+        foreach (['Miniserver', 'miniserver'] as $key) {
+            if (!empty($gen[$key]) && is_array($gen[$key])) {
+                $raw = reset($gen[$key]);
+                # SDK-kompatibles Format nachbauen: Transport + FullURI korrekt ableiten
+                $port_https = $raw['Porthttps'] ?? $raw['porthttps'] ?? '443';
+                $port_http  = $raw['Port']      ?? $raw['port']      ?? '80';
+                $use_https  = !empty($raw['Preferhttps']) || !empty($raw['preferhttps'])
+                           || !empty($raw['UseSSL'])      || !empty($raw['usessl'])
+                           || (string)$port_http === '443';
+                $transport  = $use_https ? 'https' : 'http';
+                $port_used  = $use_https ? $port_https : $port_http;
+                $ip         = $raw['Ipaddress'] ?? $raw['ipaddress'] ?? '';
+                $user       = $raw['Admin']     ?? $raw['admin']     ?? 'admin';
+                $pass       = $raw['Pass']      ?? $raw['pass']      ?? '';
+                $raw['Transport'] = $transport;
+                $raw['Port']      = $port_http;
+                $raw['PortHttps'] = $port_https;
+                $raw['IPAddress'] = $ip;
+                $raw['FullURI']   = "{$transport}://" . urlencode($user) . ':' . urlencode($pass) . "@{$ip}:{$port_used}";
+                $miniservers[1]   = $raw;
+                break;
+            }
         }
     }
 
-    if (!$ms) {
+    if (empty($miniservers)) {
         echo json_encode(['error' => 'Kein Miniserver in LoxBerry konfiguriert.']);
         exit;
     }
 
-    $ip   = $ms['Ipaddress'] ?? $ms['ipaddress'] ?? '';
-    $port = $ms['Port']      ?? $ms['port']      ?? '80';
-    $user = $ms['Admin']     ?? $ms['admin']     ?? 'admin';
-    $pass = $ms['Pass']      ?? $ms['pass']      ?? '';
-    $name = $ms['Name']      ?? $ms['name']      ?? '';
+    $ms = reset($miniservers);
 
-    if (!$ip) {
-        echo json_encode(['error' => 'Miniserver-IP nicht in LoxBerry-Config gefunden.']);
+    # 1. Koordinaten direkt in LoxBerry-Konfiguration gespeichert? (kein Miniserver-Request nötig)
+    $lat_cfg = $ms['Latitude'] ?? $ms['latitude'] ?? null;
+    $lon_cfg = $ms['Longitude'] ?? $ms['longitude'] ?? null;
+    if ($lat_cfg !== null && $lon_cfg !== null && ((float)$lat_cfg != 0.0 || (float)$lon_cfg != 0.0)) {
+        echo json_encode([
+            'lat'          => (float)$lat_cfg,
+            'lon'          => (float)$lon_cfg,
+            'display_name' => $ms['Name'] ?? $ms['name'] ?? 'Loxone Miniserver',
+            'source'       => 'LoxBerry-Konfiguration (gespeicherte Koordinaten)',
+        ]);
         exit;
     }
 
-    # LoxApp3.json: Enthält msInfo.location und ggf. GPS-Koordinaten (neuere Firmware).
-    # Range-Request: erste 16 KB reichen – msInfo steht immer am Dateianfang.
-    # HTTPS-Erkennung: UseSSL/Https-Flag aus LoxBerry config, oder Port 443.
-    # Fallback: wenn primäres Schema scheitert, wird das andere versucht (HTTP ↔ HTTPS).
+    # 2. LoxApp3.json vom Miniserver abrufen
+    # FullURI enthält bereits korrektes Schema + Port (https→PortHttps, http→Port)
+    $full_uri    = rtrim($ms['FullURI'] ?? '', '/');
     $location_str = '';
     $api_source   = '';
+    $lox_raw      = '';
 
-    $use_ssl = !empty($ms['UseSSL']) || !empty($ms['usessl']) ||
-               !empty($ms['Https'])  || !empty($ms['https'])  ||
-               (string)$port === '443';
-    $schemes = $use_ssl ? ['https', 'http'] : ['http', 'https'];
-
-    $lox_raw = '';
-    foreach ($schemes as $try_scheme) {
-        $lox_url = "{$try_scheme}://{$ip}:{$port}/data/LoxApp3.json";
+    if ($full_uri) {
+        $lox_url = $full_uri . '/data/LoxApp3.json';
         $lox_ctx = stream_context_create([
             'http' => [
-                'header'        => "Authorization: Basic " . base64_encode("{$user}:{$pass}") . "\r\n"
-                                 . "Range: bytes=0-16383\r\n",
-                'timeout'       => 5,
+                'header'        => "Range: bytes=0-16383\r\n",  # msInfo steht am Dateianfang
+                'timeout'       => 6,
                 'ignore_errors' => true,
             ],
             'ssl'  => [
-                'verify_peer'      => false,   # Miniserver nutzt selbstsigniertes Zertifikat
+                'verify_peer'      => false,  # Miniserver nutzt selbstsigniertes Zertifikat
                 'verify_peer_name' => false,
             ],
         ]);
-        $lox_handle = @fopen($lox_url, 'r', false, $lox_ctx);
-        if ($lox_handle) {
-            $lox_raw = fread($lox_handle, 16384);
-            fclose($lox_handle);
-            if ($lox_raw) break;  # Verbindung erfolgreich – kein Fallback nötig
+        $lox_raw = @file_get_contents($lox_url, false, $lox_ctx);
+
+        # Fallback: wenn FullURI-Schema fehlschlägt, anderes Schema probieren
+        if (!$lox_raw) {
+            $alt_transport = (strpos($full_uri, 'https://') === 0) ? 'http' : 'https';
+            # Port beim Wechsel anpassen
+            $port_alt = ($alt_transport === 'https')
+                      ? ($ms['PortHttps'] ?? $ms['Porthttps'] ?? '443')
+                      : ($ms['Port'] ?? '80');
+            $ip_raw   = $ms['IPAddress'] ?? $ms['Ipaddress'] ?? $ms['ipaddress'] ?? '';
+            $user_raw = $ms['Admin']     ?? $ms['admin']     ?? 'admin';
+            $pass_raw = $ms['Pass']      ?? $ms['pass']      ?? '';
+            if ($ip_raw) {
+                $alt_url  = "{$alt_transport}://" . urlencode($user_raw) . ':' . urlencode($pass_raw)
+                           . "@{$ip_raw}:{$port_alt}/data/LoxApp3.json";
+                $lox_raw  = @file_get_contents($alt_url, false, $lox_ctx);
+            }
         }
     }
 
     if ($lox_raw) {
-        # Direkte GPS-Koordinaten aus msInfo (neuere Firmware → keine Geocodierung nötig)
+        # Direkte GPS-Koordinaten aus msInfo (neuere Firmware)
         if (preg_match('/"latitude"\s*:\s*([-\d.]+)/', $lox_raw, $mLat) &&
             preg_match('/"longitude"\s*:\s*([-\d.]+)/', $lox_raw, $mLon)) {
             $lat = (float)$mLat[1];
@@ -116,7 +143,7 @@ if ($action === 'get_miniserver_coords') {
                 exit;
             }
         }
-        # "Lage"-Text aus msInfo.location
+        # "Lage"-Text aus msInfo.location → Geocodierung via Nominatim
         if (preg_match('/"location"\s*:\s*"([^"]{2,})"/', $lox_raw, $mLoc)) {
             $location_str = $mLoc[1];
             $api_source   = 'Loxone Miniserver (Lage-Feld aus Konfiguration)';
@@ -124,10 +151,12 @@ if ($action === 'get_miniserver_coords') {
     }
 
     if (!$location_str && !$lox_raw) {
-        $tried = implode(' und ', array_map(fn($s) => $s . '://' . $ip . ':' . $port, $schemes));
+        # Hilfreiche Fehlermeldung: zeige welche URL tatsächlich versucht wurde
+        $tried_url = $full_uri ? (preg_replace('/:[^:@]*@/', ':***@', $full_uri) . '/data/LoxApp3.json') : 'keine URL ermittelbar';
         echo json_encode([
-            'error' => 'Miniserver nicht erreichbar. Versucht: ' . $tried . '. '
-                     . 'Bitte Miniserver-IP, Port und Zugangsdaten in LoxBerry prüfen.',
+            'error' => 'Miniserver nicht erreichbar. Versucht: ' . $tried_url . '. '
+                     . 'Bitte Miniserver-IP, Port und Zugangsdaten in LoxBerry unter System → Miniserver prüfen. '
+                     . 'Tipp: Ist HTTPS aktiviert? Dann muss auch der HTTPS-Port (Standard: 443) eingetragen sein.',
         ]);
         exit;
     }
@@ -144,7 +173,7 @@ if ($action === 'get_miniserver_coords') {
     # Standortstring via Nominatim geocodieren
     $geo_url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' . urlencode($location_str);
     $geo_ctx = stream_context_create(['http' => [
-        'header'  => "User-Agent: Unwetter4Lox-Plugin/0.4.2\r\n",
+        'header'  => "User-Agent: Unwetter4Lox-Plugin/0.4.28\r\n",
         'timeout' => 10,
     ]]);
     $geo_res = @file_get_contents($geo_url, false, $geo_ctx);
@@ -193,16 +222,36 @@ if ($action === 'check_update') {
     exit;
 }
 
-# Stations-Cache löschen
+# Stations-Cache löschen + Daemon neustarten (Stationen werden beim nächsten Daemon-Start frisch geladen)
 if ($action === 'reload_stations') {
     header('Content-Type: application/json');
     $cache = $lbpdatadir . '/tawes_stations.json';
     if (file_exists($cache)) {
         unlink($cache);
-        echo json_encode(['ok' => true, 'msg' => 'Stations-Cache gelöscht – wird beim nächsten Daemon-Lauf neu geladen.']);
-    } else {
-        echo json_encode(['ok' => true, 'msg' => 'Kein Cache vorhanden.']);
     }
+    # Daemon neustarten damit der startup-fresh-load direkt Stationen lädt
+    $daemonscript = $lbhomedir . "/system/daemons/plugins/" . $lbpplugindir;
+    if (file_exists($daemonscript)) {
+        shell_exec("sudo " . escapeshellarg($daemonscript) . " restart 2>&1");
+        echo json_encode(['ok' => true, 'restart' => true, 'msg' => 'Stations-Cache gelöscht, Daemon wird neu gestartet…']);
+    } else {
+        echo json_encode(['ok' => true, 'restart' => false, 'msg' => 'Stations-Cache gelöscht – wird beim nächsten Daemon-Start neu geladen.']);
+    }
+    exit;
+}
+
+# Daemon-Steuerung als JSON (für AJAX-Aufrufe ohne Seiten-Redirect)
+if ($action === 'restart_json' || $action === 'start_json' || $action === 'stop_json') {
+    header('Content-Type: application/json');
+    $cmd_action = str_replace('_json', '', $action);
+    $daemonscript = $lbhomedir . "/system/daemons/plugins/" . $lbpplugindir;
+    if (!file_exists($daemonscript)) {
+        echo json_encode(['ok' => false, 'msg' => 'Daemon-Script nicht gefunden.']);
+        exit;
+    }
+    $cmd = "sudo " . escapeshellarg($daemonscript) . " " . escapeshellarg($cmd_action) . " 2>&1";
+    shell_exec($cmd);
+    echo json_encode(['ok' => true, 'action' => $cmd_action]);
     exit;
 }
 

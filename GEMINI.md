@@ -1,35 +1,66 @@
-# Gemini Handoff – Unwetter4Lox v0.4.17
+# Gemini Handoff – Unwetter4Lox v0.4.32
 
-Letzter Stand: 2026-06-09 (Claude)
+Letzter Stand: 2026-06-13 (Gemini)
 
 ---
 
 ## Aktueller Projektstatus
 
-Plugin läuft stabil auf dem LoxBerry. Version 0.4.17 ist committed und ZIP liegt bereit (`unwetter4lox_v0.4.17.zip`). Alle drei Datenquellen (ZAMG, INCA, TAWES) funktionieren. Zwei kritische Bugs wurden in dieser Session behoben.
+Plugin in aktiver Entwicklung. Version 0.4.32. Fokus auf sofortige Datenverfügbarkeit nach dem Start/Update (Cold-Start Problem behoben).
 
 ---
 
-## Was zuletzt geändert wurde
+## Was zuletzt geändert wurde (diese Session)
 
-### v0.4.17 (2026-06-09)
+### v0.4.32 (2026-06-13)
+**Initialisierungs-Logik & TAWES-Historie:**
+- **Historischer Daten-Abruf:** Beim ersten Loop-Durchlauf nach dem Start ruft der Daemon nun via `fetch_tawes_data(duration_min=60)` die historischen Daten der letzten Stunde ab. Dies füllt den `TAWES_BUFFER` (In-Memory) sofort, sodass Trends, Kaskaden und Display-Werte ohne Verzögerung zur Verfügung stehen.
+- **Status-Meldung:** Während dieses initialen Abrufs steht der Status in der UI auf `Initialisierung...`.
+- **API-Endpoint Wechsel:** Nutzt für den Initial-Load den `/timeseries/historical` Endpoint der GeoSphere API.
 
-**Bug 1 – TAWES Stationen nach Installation fehlend:**
-- Root Cause: Race-Condition zwischen `postinstall.sh` (löscht Cache) und Daemon-Start. Daemon lud alten Cache bevor der Delete lief.
-- Fix: Neues Flag `_tawes_startup_fresh_done` in `bin/unwetter4lox_daemon.py`. Beim ersten Aufruf von `load_tawes_stations()` nach Daemon-Start wird der Cache-File immer ignoriert und frisch von der API geladen.
+### v0.4.31 (2026-06-13)
+...
 
-**Bug 2 – alarm_regen=1 trotz REGEN_ALARM=30mm/h (Nieselregen):**
-- Root Cause: TAWES `regen_upstream=1` wurde bei jeder Upstream-Station mit RR>0.1mm/10min gesetzt, ohne Intensitäts-Check in `build_alarm()`.
-- Fix: Neues Feld `regen_upstream_mm` (mm/h, nach ×6-Umrechnung aus mm/10min TAWES-Messwert) in `correlate_tawes()`. In `build_alarm()` wird TAWES Regen-Alarm nur ausgelöst wenn `upstream_mm >= REGEN_ALARM / 3.0` oder `upstream_mm == 0` (unbekannt → konservativ alarmieren).
+- `regen_upstream` Buffer-Fenster auf 30min begrenzt (`REGEN_PUFFER_FENSTER = 3` Einträge). Verhindert "Regen bei Vöcklabruck" Notification Stunden nach dem letzten Regen.
+- `wind_kaskade` Buffer-Fenster auf 60min begrenzt (`WIND_KASKADE_FENSTER = 6` Einträge). Verhindert dass alter Böen-Eintrag + aktuelle Einzelstation als Kaskade erkannt wird.
+- Neues `alarm/wind_quelle` MQTT Topic: `ZAMG`, `INCA (52.3km/h)`, `TAWES_STURM (65km/h)`, `TAWES_KASKADE`, `–`.
 
-**Konsistenz-Audit:**
-- Unit-Bug behoben: TAWES RR = mm/10min, ×6 ergibt mm/h (in regen_upstream_mm)
-- Versionsstrings im Daemon (Docstring + run-Log) von v0.4.5 auf v0.4.17 korrigiert
-- README Version von v0.4.8 auf v0.4.17 aktualisiert
-- `tawes/regen_upstream_mm` in README + help.php dokumentiert
-- alarm/regen Tabellen in README + help.php: TAWES Intensitäts-Gate erklärt
-- UI (index.php) zeigt jetzt Upstream-Regenintensität in der Regenfront-Zeile
-- CHANGELOG.md: v0.4.11 bis v0.4.17 nachgetragen
+### v0.4.26 (2026-06-11)
+**Konsens-Gate + API-Robustheit:**
+- Kritischer Fix: `build_alarm()` gated TAWES-Wind-Alarm auf `sturm_upstream == 1`
+- Konsens-Minimum auf 2 Stationen erhöht (`max(2, round(N×30%))`)
+- Wind-Kaskaden-Erkennung mit ETA-Berechnung
+- Robuste API-Fehlerbehandlung, `tawes/api_ok` MQTT Topic
+- `status/zamg_ok`, `status/inca_ok`, `status/tawes_ok` Topics
+- Buffer-Cleanup nach Windrichtungswechsel
+
+### v0.4.25 (2026-06-11)
+**TAWES Elevation-Support + Lokal-Regen-Erkennung:**
+- `load_tawes_stations()`: `alt` (Seehöhe m) aus API speichern
+- `MAX_UPSTREAM_HOEHE_M` (Standard 1200m): Alpine Stationen aus Wind-Konsens ausschließen
+- `tawes/alpine_upstream` Topic: Anzahl ausgeschlossener Upstream-Stationen
+- `regen_lokal` / `regen_lokal_mm`: Stationen innerhalb 40km (damals fix) auf RR > 0.1mm/10min prüfen
+
+### v0.4.24 (2026-06-10)
+**TAWES Konsens-Schwelle:**
+- `MAX_STATIONS` (Standard 25) und `MIN_ALARM_PROZENT` (Standard 30) in Config [TAWES]
+- Wind-Konsens: `alarm_count >= max(1, round(len(ffx_vals) * PCT/100))`
+- Settings-UI Schieberegler
+
+### v0.4.23 (2026-06-10)
+**Bugfix retained Messages:** Bei alarm==0 leerer String → löscht retained Message im Broker
+
+### v0.4.22 (2026-06-10)
+**Notification-Gate:** `notification/inca`, `notification/tawes`, `notification/alle` nur bei `alarm/gesamt ≥ 1`. `alarm/entwarnung` (0/1) einmalig bei Alarm-Ende.
+
+### v0.4.21 (2026-06-09)
+`_canon_sid` Bugfix: längste Zifferngruppe statt letzte. Float-ID-Fix.
+
+### v0.4.20 (2026-06-09)
+TAWES Cache bei Daemon-Start immer löschen (kein Flag mehr).
+
+### v0.4.19 (2026-06-09)
+Alarm-Schema 1×/2×/3×-Schwellwert. INCA/TAWES können Level 3 erreichen. UI AJAX-Restart.
 
 ---
 
@@ -38,35 +69,23 @@ Plugin läuft stabil auf dem LoxBerry. Version 0.4.17 ist committed und ZIP lieg
 ### Alarm-Level Schema (gilt für ALLE alarm/ Topics)
 ```
 0 = Ruhig
-1 = Vorsicht  → ZAMG Gelb / INCA ≥ BOEN_ALARM (60min) / TAWES ≥ BOEN_ALARM
-2 = Warnung   → ZAMG Orange / INCA ≥ BOEN_ALARM (30min) oder ≥ REGEN_ALARM / TAWES 2×BOEN
-3 = Extrem    → NUR ZAMG Rot/Lila
+1 = Vorsicht  → ZAMG Gelb   / INCA/TAWES ≥ 1× Schwellwert
+2 = Warnung   → ZAMG Orange / INCA/TAWES ≥ 2× Schwellwert
+3 = Extrem    → ZAMG Rot/Lila / INCA/TAWES ≥ 3× Schwellwert
 ```
-**WICHTIG:** INCA/TAWES können NUR bis Level 2 anheben. `aktiv`-Flag ändert Level NICHT.
-
-### Schwellwerte (in Config einstellbar, Abschnitt [THRESHOLDS])
-- `BOEN_ALARM` (Standard: 60 km/h) – Wind-Alarm INCA + TAWES
-- `REGEN_ALARM` (Standard: 10 mm/h) – Regen-Alarm für INCA (direkt) und TAWES (Gate: REGEN_ALARM/3)
+`aktiv`-Flag ändert Level NICHT. Wind: INCA nutzt `fx_max_60min` direkt (kein Konsens). TAWES braucht Konsens (`sturm_upstream=1`) ODER Wind-Kaskade (`wind_kaskade=1`).
 
 ### TAWES RR Einheit – ACHTUNG
-TAWES API gibt `RR` in **mm/10min**. Umrechnung zu mm/h: ×6.
-- `regen_upstream` Detektionsschwelle: RR > 0.1 mm/10min ≈ 0.6 mm/h (sehr empfindlich, für Info)
-- `regen_upstream_mm` im Return-Dict und MQTT-Topic: bereits in mm/h (nach ×6 Umrechnung)
-- Alarm-Schwelle in `build_alarm()`: `upstream_mm >= REGEN_ALARM / 3.0` (beide in mm/h → korrekt)
+TAWES API gibt `RR` in **mm/10min**. Umrechnung zu mm/h: ×6. `regen_upstream_mm` und `regen_lokal_mm` sind bereits in mm/h (nach ×6). REGEN_ALARM ist in mm/h.
 
-### Notification-Dedup
-Notifications werden nur publiziert wenn sich der Text ändert (via `prev.get('_n_geo', '')` etc. in `state.json`). Volatile Werte (ETA, Windstärke) werden auf 5er-Schritte gerundet bevor Textvergleich.
+### TAWES Lokal-Regen Radius (v0.4.28+)
+- Anzeigeradius fix: 40km (Log, Info)
+- Alarmradius konfigurierbar: `TAWES_REGEN_LOKAL_KM` (Standard 25km, Config `[TAWES]`, Settings-UI)
+- Stationen 25–40km: im Log sichtbar, kein Alarm-Beitrag
 
-### TAWES Startup-Fresh-Load
-```python
-_tawes_startup_fresh_done = False  # Modul-Variable, Zeile ~328
-
-# In load_tawes_stations():
-if not _tawes_startup_fresh_done:
-    _tawes_startup_fresh_done = True
-    log.info('TAWES: Daemon-Start – Station-Cache ignoriert, frischer API-Abruf...')
-    # → springt direkt zur API-Fetch-Logik, überspringt Cache-File
-```
+### TAWES Buffer-Fenster (v0.4.27+)
+- `REGEN_PUFFER_FENSTER = 3` (30min): verhindert stale `regen_upstream=1` nach Regen-Ende
+- `WIND_KASKADE_FENSTER = 6` (60min): verhindert False-Alarm durch alten Böen-Eintrag
 
 ---
 
@@ -76,56 +95,59 @@ if not _tawes_startup_fresh_done:
 bin/unwetter4lox_daemon.py    ← Haupt-Daemon, alle Logik
 webfrontend/htmlauth/
   index.php                   ← Status-UI
-  settings.php                ← Konfiguration
-  help.php                    ← MQTT-Referenz, Alarm-Logik-Doku
+  settings.php                ← Konfiguration (inkl. Lokal-Regen Slider)
+  help.php                    ← MQTT-Referenz, komplett aktualisiert v0.4.28
   ajax.php                    ← Daemon-Steuerung, Geocoding
 postinstall.sh                ← Cache löschen + Daemon restart nach Install
-README.md                     ← Vollständige Doku (aktuell halten!)
-CHANGELOG.md                  ← Versionshistorie (aktuell halten!)
+README.md                     ← Vollständige Doku, aktualisiert auf v0.4.28
+CHANGELOG.md                  ← Versionshistorie
 aimemory.md                   ← KI-Kontext (IMMER zuerst lesen, IMMER aktualisieren!)
-gemini.md                     ← Dieses Handoff-Dokument
+GEMINI.md                     ← Dieses Handoff-Dokument
 build_zip.ps1                 ← ZIP-Build (Windows, Forward-Slash-Fix)
 ```
 
 ---
 
-## MQTT Topics Übersicht
+## MQTT Topics Übersicht (vollständig)
 
 **Präfix:** `unwetter/` (konfigurierbar in [MQTT] TOPIC_PREFIX)
 
-| Gruppe | Wichtigste Topics |
-|:-------|:-----------------|
-| `alarm/` | `gesamt` (0-3), `gewitter`, `wind`, `regen`, `hagel`, `schnee`, `zusammenfassung` |
-| `notification/` | `geosphere`, `inca`, `tawes`, `alle` – immer befüllt, nur bei Änderung publiziert |
-| `zamg/` | `{typ}/stufe`, `{typ}/aktiv`, `{typ}/bald`, `max_stufe`, `irgendwas_aktiv`, `akutwarnung` |
-| `inca/` | `fx`, `ff`, `fx_max_30min`, `fx_max_60min`, `rr`, `regen_alarm`, `bald_regen`, `bald_sturm_30`, `bald_sturm_60`, `pt`, `pt_name`, `pt_bald`, `pt_bald_name`, `minuten_bis_regen` |
-| `tawes/` | `regen_upstream`, `regen_upstream_mm`, `regen_eta_min`, `regen_konfidenz`, `wind_upstream_kmh`, `sturm_upstream`, `wind_trend`, `gewitter_signal`, `druck_trend`, `dominante_windrichtung`, `upstream_aktiv` |
-| System | `status`, `letzter_abruf_datum`, `letzter_abruf_epoch` |
+| Gruppe | Topics |
+|:-------|:-------|
+| `alarm/` | `gesamt`, `gewitter`, `wind`, `regen`, `hagel`, `schnee`, `stufe`, `zusammenfassung`, `entwarnung`, `wind_quelle`, `regen_quelle` |
+| `status/` | `status`, `zamg_ok`, `inca_ok`, `tawes_ok`, `letzter_abruf_datum`, `letzter_abruf_epoch` |
+| `notification/` | `geosphere` (immer), `inca`, `tawes`, `alle` (nur bei alarm/gesamt≥1) |
+| `zamg/` | `{typ}/stufe`, `{typ}/aktiv`, `{typ}/bald`, `{typ}/start_epoch`, `{typ}/end_epoch`, `{typ}/notification`, `max_stufe`, `irgendwas_aktiv`, `akutwarnung`, `letzter_abruf` |
+| `inca/` | `fx`, `ff`, `fx_max_30min`, `fx_max_60min`, `rr`, `regen_alarm`, `bald_regen`, `bald_hagel`, `bald_graupel`, `bald_sturm_30`, `bald_sturm_60`, `pt`, `pt_name`, `pt_bald`, `pt_bald_name`, `minuten_bis_regen`, `letzter_abruf` |
+| `tawes/` | `dominante_windrichtung`, `dominante_windrichtung_name`, `upstream_aktiv`, `wind_upstream_kmh`, `wind_trend`, `sturm_upstream`, `wind_kaskade`, `wind_kaskade_eta_min`, `wind_kaskade_speed_kmh`, `alpine_upstream`, `regen_upstream`, `regen_upstream_mm`, `regen_eta_min`, `front_speed_kmh`, `regen_konfidenz`, `regen_lokal`, `regen_lokal_mm`, `regen_lokal_station`, `druck_trend`, `gewitter_signal`, `stationen_anzahl`, `naechste_station`, `api_ok`, `letztes_update` |
 
 ---
 
 ## Offene Tasks / Bekannte Punkte
 
-- **Testen:** v0.4.17 auf LoxBerry installieren und validieren:
-  1. TAWES Stationen nach frischer Installation vorhanden (ohne manuelles Cache-Löschen)
-  2. `alarm/regen` bleibt 0 bei Nieselregen wenn REGEN_ALARM=30mm/h
-- **LB_SDK:** Python SDK (`loxberry`) nicht installiert → Fallback-Logging aktiv (kein Bug)
-- **TAWES-Netzrealität:** Wenige Stationen mit Böen-Sensoren in der Region – FFX=None ist normal
+- v0.4.28 ZIP erstellen und auf LoxBerry installieren: `.\build_zip.ps1 -Version "0.4.28"`
+- Nach Installation validieren: GALLSPACH (28km NW) darf keinen alarm/regen mehr auslösen
+- `notification/alle` zeigt keinen "kein Alarm"-Text wenn nur TAWES aktiven Alarm hat
+- LB_SDK: Python SDK (`loxberry`) nicht installiert → Fallback-Logging aktiv (kein Bug)
+- TAWES-Netzrealität: Viele Klimastationen ohne Anemometer → `–` in Wind/Böen ist normal
 
 ---
 
-## ZIP erstellen (Windows)
+## Wichtige Workflows
+
+- **ZIP-Erstellung:** Nach jeder funktionalen Änderung oder Versionierung MUSS automatisch ein neues Plugin-ZIP erstellt werden (`.\build_zip.ps1 -Version "X.X.X"`).
 
 ```powershell
-cd "...\Unwetter4Lox"
-.\build_zip.ps1 -Version "0.4.17"
+.\build_zip.ps1 -Version "0.4.28"
 ```
 
-**WICHTIG:** Immer `build_zip.ps1` verwenden, **nie** `Compress-Archive`! Das .NET ZipFile API erzeugt Forward-Slashes in Pfaden. `Compress-Archive` erzeugt Windows-Backslashes → LoxBerry-Installation schlägt fehl.
+**WICHTIG:** Immer `build_zip.ps1` verwenden, **nie** `Compress-Archive`! Das .NET ZipFile API erzeugt Forward-Slashes in Pfaden. `Compress-Archive` → Windows-Backslashes → LoxBerry-Installation schlägt fehl.
+
+**Namenskonvention:** `unwetter4Lox-V.0.4.28.zip`
 
 ---
 
 ## Sync-Pflicht (für beide AIs)
 
 Beim Start: `aimemory.md` lesen.  
-Beim Abschluss / Wechsel: `aimemory.md` UND `gemini.md` aktualisieren.
+Beim Abschluss / Wechsel: `aimemory.md` UND `GEMINI.md` aktualisieren.

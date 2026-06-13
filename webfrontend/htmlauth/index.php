@@ -150,9 +150,18 @@ $header_tc = $any_alarm == 1 ? '#333' : 'white';
         <span style="font-size:16px; font-weight:bold; color:<?= $daemon_running ? '#4CAF50' : '#f44336' ?>">
             ● Daemon <?= $daemon_running ? $L['MAIN.DAEMON_RUNNING'] : $L['MAIN.DAEMON_STOPPED'] ?>
         </span>
+        <?php
+        $last_epoch = (int)($state['letzter_abruf_epoch'] ?? 0);
+        $age = time() - $last_epoch;
+        $interval = (int)($cfg['SCHEDULE']['INTERVAL'] ?? 300);
+        $is_stale = ($coords_set && $daemon_running && $last_epoch > 0 && $age > ($interval * 2 + 60));
+        ?>
         <p style="font-size:12px;color:#888;margin:4px 0 0">
-            Status: <span class="status-badge <?= strpos($status,'Error')!==false?'badge-err':'badge-ok' ?>"><?= htmlspecialchars($status) ?></span>
-            &nbsp;·&nbsp; Letzter Abruf: <b><?= htmlspecialchars($state['letztes_update'] ?? '–') ?></b>
+            Status: <span class="status-badge <?= (strpos($status,'Error')!==false || $is_stale || !$daemon_running)?'badge-err':'badge-ok' ?>"><?= htmlspecialchars($status) ?></span>
+            &nbsp;·&nbsp; Letzter Abruf: <b style="<?= $is_stale ? 'color:#f44336' : '' ?>"><?= htmlspecialchars($state['letztes_update'] ?? '–') ?></b>
+            <?php if ($is_stale): ?>
+                <br><span style="color:#f44336; font-weight:bold; font-size:11px">⚠️ Warnung: Seit <?= round($age/60) ?> min keine neuen Daten! (Daemon hängt?)</span>
+            <?php endif; ?>
         </p>
         <table style="font-size:11px;color:#666;margin-top:5px;border-collapse:collapse">
         <tr>
@@ -165,13 +174,14 @@ $header_tc = $any_alarm == 1 ? '#333' : 'white';
         </tr>
         </table>
     </div>
-    <div style="display:flex;gap:8px">
+    <div style="display:flex;gap:8px;align-items:center">
         <?php if ($daemon_running): ?>
-            <a href="ajax.php?action=restart" data-role="button" data-inline="true" data-mini="true" data-theme="a">↺ Restart</a>
-            <a href="ajax.php?action=stop"    data-role="button" data-inline="true" data-mini="true" data-theme="b">■ Stop</a>
+            <a href="#" id="btn-daemon-restart" data-role="button" data-inline="true" data-mini="true" data-theme="a">↺ Restart</a>
+            <a href="ajax.php?action=stop"      data-role="button" data-inline="true" data-mini="true" data-theme="b">■ Stop</a>
         <?php else: ?>
-            <a href="ajax.php?action=start"   data-role="button" data-inline="true" data-mini="true" data-theme="b" <?= !$coords_set ? 'class="ui-disabled"' : '' ?>>▶ Start</a>
+            <a href="#" id="btn-daemon-start"   data-role="button" data-inline="true" data-mini="true" data-theme="b" <?= !$coords_set ? 'class="ui-disabled"' : '' ?>>▶ Start</a>
         <?php endif; ?>
+        <span id="daemon-action-status" style="font-size:11px;color:#aaa;display:none"></span>
         <?php
         $_ptr  = $lbplogdir . '/daemon.log.current';
         $_clog = file_exists($_ptr) ? trim(file_get_contents($_ptr)) : null;
@@ -315,16 +325,19 @@ if ($tawes_en):
     <td style="padding:4px;text-align:center" title="Himmelsrichtung der Station von deinem Standort">Richtg.</td>
     <td style="padding:4px;text-align:center" title="Mittlere Windgeschwindigkeit (km/h)">Wind</td>
     <td style="padding:4px;text-align:center" title="Böenspitzen (km/h)">Böen</td>
-    <td style="padding:4px;text-align:center" title="Niederschlag mm pro 10 Minuten">Regen</td>
+    <td style="padding:4px;text-align:center" title="Niederschlag mm/h (API-Wert mm/10min × 6)">Regen</td>
     <td style="padding:4px;text-align:center" title="⬆ = Upstream: Wind kommt von dieser Station zu dir">⬆</td>
 </tr>
 <?php
-$boen_sw = (float)($cfg['THRESHOLDS']['BOEN_ALARM'] ?? 60);
+$boen_sw  = (float)($cfg['THRESHOLDS']['BOEN_ALARM']  ?? 60);
+$regen_sw = (float)($cfg['THRESHOLDS']['REGEN_ALARM'] ?? 10);
 foreach ($tawes['alle_stationen'] as $st):
     $up     = (bool)($st['ist_upstream'] ?? false);
-    $rr_v   = $st['RR']     ?? null;
+    $rr_raw = $st['RR'] ?? null;
+    $rr_v   = ($rr_raw !== null) ? round($rr_raw * 6, 1) : null;  // mm/10min × 6 = mm/h
     $ffx_v  = $st['FFX_kmh'] ?? null;
-    $rr_c   = ($rr_v  !== null && $rr_v  > 0.05)    ? '#2196F3' : '';
+    $rr_c   = ($rr_v !== null && $rr_v >= $regen_sw) ? '#f44336'
+            : (($rr_v !== null && $rr_v > 0.5) ? '#2196F3' : '');
     $ffx_c  = ($ffx_v !== null && $ffx_v >= $boen_sw) ? '#f44336' : '';
 ?>
 <tr style="background:<?= $up ? 'rgba(33,150,243,0.07)' : 'transparent' ?>;border-bottom:1px solid #eee">
@@ -340,7 +353,7 @@ foreach ($tawes['alle_stationen'] as $st):
 </table>
 <p style="font-size:10px;color:#888;margin:4px 0">
     <b>⬆ Upstream</b> = der Wind kommt gerade von dieser Station zu dir. Diese Stationen sind besonders relevant für Vorhersagen.<br>
-    <b>Wind</b> = mittl. Windgeschwindigkeit km/h &nbsp;·&nbsp; <b>Böen</b> = Spitzenböen km/h &nbsp;·&nbsp; <b>Regen</b> = mm/10min
+    <b>Wind</b> = mittl. Windgeschwindigkeit km/h &nbsp;·&nbsp; <b>Böen</b> = Spitzenböen km/h &nbsp;·&nbsp; <b>Regen</b> = mm/h &nbsp;·&nbsp; <span style="color:#2196F3">■</span> Regen &nbsp;·&nbsp; <span style="color:#f44336">■</span> ≥ Alarm-Schwelle
 </p>
 </div>
 <?php endif; ?>
@@ -366,8 +379,10 @@ foreach ($tawes['alle_stationen'] as $st):
 (function() {
     var knownEpoch   = <?= (int)($state['letzter_abruf_epoch'] ?? 0) ?>;
     var knownRunning = <?= $daemon_running ? 'true' : 'false' ?>;
-    var statusEl = document.getElementById('refresh-status');
-    var failCount = 0;
+    var statusEl     = document.getElementById('refresh-status');
+    var actionStatus = document.getElementById('daemon-action-status');
+    var failCount    = 0;
+    var waitForStart = false;  // true während wir auf Daemon-Start nach AJAX-Aktion warten
 
     function checkForUpdate() {
         fetch('ajax.php?action=check_update', { cache: 'no-store' })
@@ -376,6 +391,12 @@ foreach ($tawes['alle_stationen'] as $st):
                 failCount = 0;
                 var newData    = d.epoch   && d.epoch   > knownEpoch;
                 var statusFlip = typeof d.running !== 'undefined' && d.running !== knownRunning;
+                if (waitForStart && d.running) {
+                    // Daemon ist jetzt oben – Seite neu laden
+                    if (actionStatus) actionStatus.textContent = '✓ Daemon läuft – Seite wird geladen…';
+                    location.reload();
+                    return;
+                }
                 if (newData || statusFlip) {
                     if (statusEl) statusEl.textContent = '⟳ ' + (statusFlip ? 'Daemon-Status geändert' : 'Neue Daten') + ' – wird geladen…';
                     location.reload();
@@ -390,8 +411,50 @@ foreach ($tawes['alle_stationen'] as $st):
             });
     }
 
-    // Erste Prüfung nach 10s (schnelles Feedback nach Daemon-Start), dann alle 30s
-    setTimeout(checkForUpdate, 10000);
+    function daemonAction(action_json, label) {
+        if (actionStatus) { actionStatus.textContent = label; actionStatus.style.display = 'inline'; }
+        // Buttons deaktivieren
+        var btns = document.querySelectorAll('#btn-daemon-restart, #btn-daemon-start');
+        btns.forEach(function(b){ b.classList.add('ui-disabled'); });
+        fetch('ajax.php?action=' + action_json, { cache: 'no-store' })
+            .then(function(r) { return r.json(); })
+            .then(function() {
+                waitForStart = true;
+                // Schnelles Polling bis Daemon oben ist (alle 3s, max 60s)
+                var tries = 0;
+                var poll = setInterval(function() {
+                    tries++;
+                    checkForUpdate();
+                    if (tries >= 20) { clearInterval(poll); location.reload(); }
+                }, 3000);
+            })
+            .catch(function() {
+                if (actionStatus) actionStatus.textContent = '⚠ Fehler bei Daemon-Steuerung';
+                btns.forEach(function(b){ b.classList.remove('ui-disabled'); });
+            });
+    }
+
+    // Restart-Button: AJAX statt Redirect
+    var btnRestart = document.getElementById('btn-daemon-restart');
+    if (btnRestart) {
+        btnRestart.addEventListener('click', function(e) {
+            e.preventDefault();
+            daemonAction('restart_json', '↺ Neustart läuft…');
+        });
+    }
+
+    // Start-Button: AJAX statt Redirect
+    var btnStart = document.getElementById('btn-daemon-start');
+    if (btnStart) {
+        btnStart.addEventListener('click', function(e) {
+            e.preventDefault();
+            if (btnStart.classList.contains('ui-disabled')) return;
+            daemonAction('start_json', '▶ Daemon startet…');
+        });
+    }
+
+    // Erste Prüfung nach 5s (schnelles Feedback nach Daemon-Start), dann alle 30s
+    setTimeout(checkForUpdate, 5000);
     setInterval(checkForUpdate, 30000);
 })();
 </script>
