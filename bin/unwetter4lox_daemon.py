@@ -1,4 +1,4 @@
-"""Unwetter4Lox Daemon v0.9.4 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
+"""Unwetter4Lox Daemon v0.9.5 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math, re, traceback
 from datetime import datetime, timezone, timedelta
 from collections import deque
@@ -572,9 +572,9 @@ def fetch_zamg():
 # ---------------------------------------------------------------------------
 def fetch_inca():
     n_steps = max(1, INCA_HORIZON // 15)
-    # Kein output_format – der timeseries/forecast-Endpoint liefert standardmäßig GeoJSON
+    # GeoSphere timeseries/forecast erwartet lat_lon=LAT,LON (kombiniert, nicht lat=&lon= getrennt)
     url = (f'https://dataset.api.hub.geosphere.at/v1/timeseries/forecast/nowcast-v1-15min-1km'
-           f'?parameters=FF,FX,RR,PT&lat={LAT}&lon={LON}')
+           f'?parameters=FF,FX,RR,PT&lat_lon={LAT},{LON}')
     data = fetch_json(url, 'INCA')
     if not data: return None
     # Timeseries-Endpoint: kann als Feature-Array oder direkt als Feature kommen
@@ -816,7 +816,7 @@ def publish_all(status_msg, tawes=None, zamg=None, inca=None, alarm=None, prev=N
 MQTT_WATCHDOG_TIMEOUT = 1800
 
 def run():
-    log.info(f'Unwetter4Lox v0.9.4 gestartet | Interval={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT}')
+    log.info(f'Unwetter4Lox v0.9.5 gestartet | Interval={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT}')
     try:
         with open(PID_FILE, 'w') as f: f.write(str(os.getpid()))
     except: pass
