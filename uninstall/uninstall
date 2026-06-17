@@ -1,0 +1,27 @@
+#!/bin/bash
+# Unwetter4Lox uninstall – wird von LoxBerry beim Deinstallieren aufgerufen
+# REPLACELBHOMEDIR wird vom LoxBerry-Installer durch den tatsächlichen Pfad ersetzt
+
+LBHOMEDIR="REPLACELBHOMEDIR"
+PLUGIN="unwetter4lox"
+
+echo "<INFO> Unwetter4Lox wird deinstalliert..."
+
+# Daemon stoppen
+DAEMONSCRIPT="${LBHOMEDIR}/system/daemons/plugins/${PLUGIN}"
+if [ -x "${DAEMONSCRIPT}" ]; then
+    echo "<INFO> Daemon wird gestoppt..."
+    "${DAEMONSCRIPT}" stop 2>/dev/null || true
+    echo "<OK> Daemon gestoppt"
+fi
+
+# Sudoers-Datei entfernen (die von postroot.sh unter /etc/sudoers.d/ erstellt wurde)
+SUDOERS="/etc/sudoers.d/${PLUGIN}"
+if [ -f "${SUDOERS}" ]; then
+    rm -f "${SUDOERS}"
+    echo "<OK> Sudoers entfernt: ${SUDOERS}"
+fi
+
+# Alle Plugin-Verzeichnisse werden von LoxBerry automatisch nach diesem Script entfernt
+echo "<OK> Unwetter4Lox Deinstallation abgeschlossen"
+exit 0
