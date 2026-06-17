@@ -1,4 +1,4 @@
-"""Unwetter4Lox Daemon v0.9.3 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
+"""Unwetter4Lox Daemon v0.9.4 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math, re, traceback
 from datetime import datetime, timezone, timedelta
 from collections import deque
@@ -256,40 +256,44 @@ def _on_disconnect(c, u, rc):
         log.warning(f'MQTT: Verbindung unerwartet getrennt – {reason} (RC={rc}) | Reconnect #{_mqtt_reconnect_count} folgt automatisch')
 
 def mqtt_connect():
+    """Erstellt neuen MQTT-Client und verbindet. Paho's loop_start() übernimmt
+    danach alle Auto-Reconnects – diese Funktion wird im Normalbetrieb nur EINMAL
+    beim Start aufgerufen, und nur als Hard-Reset nach sehr langer Unterbrechung."""
     global mqtt_client, _mqtt_reconnect_count
     if not MQTT_OK: return False
-    # Alten Client sauber beenden bevor neuer erstellt wird
+    # Alten Client vollständig beenden bevor neuer erstellt wird
     if mqtt_client is not None:
         try:
-            mqtt_client.loop_stop()
+            mqtt_client.loop_stop()   # Blockiert bis Background-Thread beendet
+        except: pass
+        try:
             mqtt_client.disconnect()
         except: pass
         mqtt_client = None
-        time.sleep(0.5)  # OS Zeit geben um Socket freizugeben
+        time.sleep(1.5)  # Längere Pause: OS-Socket-Release + Broker-Cleanup
     _mqtt_connected.clear()
     try:
         try:
-            mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, client_id='unwetter4lox', clean_session=True)
+            c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, client_id='unwetter4lox', clean_session=True)
         except:
-            mqtt_client = mqtt.Client(client_id='unwetter4lox', clean_session=True)
-        mqtt_client.on_connect    = _on_connect
-        mqtt_client.on_disconnect = _on_disconnect
-        # Kürzeres Keepalive: tote Verbindungen werden schneller erkannt (45s statt 90s)
-        mqtt_client.reconnect_delay_set(min_delay=5, max_delay=60)
+            c = mqtt.Client(client_id='unwetter4lox', clean_session=True)
+        c.on_connect    = _on_connect
+        c.on_disconnect = _on_disconnect
+        # Paho Auto-Reconnect: nach Disconnect wartet paho 10–120s und reconnectet selbst.
+        # Kein manueller Reconnect im Haupt-Loop nötig – das verhindert Client-ID-Konflikte.
+        c.reconnect_delay_set(min_delay=10, max_delay=120)
         lwt_topic = f'{TOPIC_PREFIX}/status'
-        lwt_msg   = L['status_err'].format(v='Offline (LWT)')
-        mqtt_client.will_set(lwt_topic, lwt_msg, qos=1, retain=True)
-        if MQTT_USER: mqtt_client.username_pw_set(MQTT_USER, MQTT_PASS)
-        mqtt_client.connect(MQTT_BROKER, MQTT_PORT, keepalive=30)
-        mqtt_client.loop_start()
-        connected = _mqtt_connected.wait(timeout=10)
+        c.will_set(lwt_topic, L['status_err'].format(v='Offline (LWT)'), qos=1, retain=True)
+        if MQTT_USER: c.username_pw_set(MQTT_USER, MQTT_PASS)
+        c.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
+        mqtt_client = c
+        c.loop_start()
+        connected = _mqtt_connected.wait(timeout=15)
         if connected:
-            # LWT sofort überschreiben – verhindert "Offline"-Status nach Reconnect
-            try:
-                mqtt_client.publish(f'{TOPIC_PREFIX}/status', L['status_ok'], qos=1, retain=True)
+            try: c.publish(f'{TOPIC_PREFIX}/status', L['status_ok'], qos=1, retain=True)
             except: pass
         else:
-            log.warning(f'MQTT: Verbindungsaufbau Timeout (10s) | Broker={MQTT_BROKER}:{MQTT_PORT}')
+            log.warning(f'MQTT: Verbindungsaufbau Timeout (15s) | Broker={MQTT_BROKER}:{MQTT_PORT}')
         return connected
     except Exception as e:
         log.error(f'MQTT: Verbindungsfehler: {e} | Broker={MQTT_BROKER}:{MQTT_PORT}')
@@ -318,9 +322,17 @@ def publish(topic, value, retain=True):
 
 def fetch_json(url, provider):
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Unwetter4Lox/0.9.3'})
+        req = urllib.request.Request(url, headers={'User-Agent': 'Unwetter4Lox/0.9.4'})
         with urllib.request.urlopen(req, timeout=15) as r: return json.loads(r.read().decode())
-    except Exception as e: log.error(f'HTTP {provider}: {e} | {url[:100]}'); return None
+    except urllib.error.HTTPError as e:
+        body = ''
+        try: body = e.read().decode('utf-8', errors='replace')[:300]
+        except: pass
+        log.error(f'HTTP {provider}: {e} | {url[:120]} | API-Antwort: {body}')
+        return None
+    except Exception as e:
+        log.error(f'HTTP {provider}: {e} | {url[:120]}')
+        return None
 
 # ---------------------------------------------------------------------------
 # TAWES 360° Stationsnetz
@@ -800,11 +812,11 @@ def publish_all(status_msg, tawes=None, zamg=None, inca=None, alarm=None, prev=N
         'tawes': {k: v for k, v in (tawes or {}).items() if k not in ('_api_ok', 'alle_stationen')},
     })
 
-# Watchdog: wenn seit mehr als 10 Minuten keine erfolgreiche Verbindung bestand → Reconnect
-MQTT_WATCHDOG_TIMEOUT = 600
+# Watchdog: Hard Reset wenn seit 30min kein erfolgreiches Publish (Zombie-TCP-Erkennung)
+MQTT_WATCHDOG_TIMEOUT = 1800
 
 def run():
-    log.info(f'Unwetter4Lox v0.9.3 gestartet | Interval={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT}')
+    log.info(f'Unwetter4Lox v0.9.4 gestartet | Interval={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT}')
     try:
         with open(PID_FILE, 'w') as f: f.write(str(os.getpid()))
     except: pass
@@ -825,21 +837,21 @@ def run():
 
     while True:
         try:
-            # --- MQTT-Watchdog ---
+            # --- MQTT-Status-Check ---
+            # Paho's loop_start() + reconnect_delay_set() übernehmen alle Reconnects automatisch.
+            # Wir greifen NUR im Extremfall ein (Zombie-TCP nach 30min ohne Publish).
             if not _mqtt_connected.is_set():
                 elapsed = time.time() - _last_successful_publish if _last_successful_publish > 0 else 0
-                log.info(f'MQTT: Nicht verbunden (letztes Publish vor {elapsed:.0f}s) – Reconnect...')
-                mqtt_connect()
+                log.info(f'MQTT: Warte auf Verbindung (paho reconnectet – letztes Publish vor {elapsed:.0f}s)')
             elif (_last_successful_publish > 0 and
-                  _mqtt_connected.is_set() and
                   (time.time() - _last_successful_publish) > MQTT_WATCHDOG_TIMEOUT):
-                # Verbunden laut Flag, aber seit WATCHDOG_TIMEOUT kein erfolgreiches Publish → Zombie-TCP
+                # Extremfall: seit 30min kein erfolgreiches Publish obwohl connected-Flag gesetzt
+                # → Zombie-TCP-Verbindung: Full Hard Reset (kein normaler paho-Reconnect mehr)
                 log.warning(
                     f'MQTT-Watchdog: Kein Publish seit {(time.time()-_last_successful_publish)/60:.0f}min '
-                    f'(Reconnects gesamt: {_mqtt_reconnect_count}) – erzwinge Reconnect'
+                    f'– Hard Reset (Reconnects gesamt: {_mqtt_reconnect_count})'
                 )
-                _mqtt_connected.clear()
-                mqtt_connect()
+                mqtt_connect()  # Nur in diesem seltenen Extremfall
 
             status = 'OK'
 
