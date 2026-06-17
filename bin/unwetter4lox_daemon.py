@@ -405,7 +405,7 @@ def fetch_tawes_data(station_ids, duration_min=0):
     ids = station_ids[:TAWES_MAX_STATIONS]; sid_params = '&'.join(f'station_ids={sid}' for sid in ids)
     if duration_min > 0:
         start_ts = (datetime.now(timezone.utc) - timedelta(minutes=duration_min)).strftime('%Y-%m-%dT%H:%M')
-        url = f'https://dataset.api.hub.geosphere.at/v1/timeseries/historical/tawes-v1-10min?parameters=RR,FF,FFX,DD,P,RF&{sid_params}&start={start_ts}&output_format=geojson'
+        url = f'https://dataset.api.hub.geosphere.at/v1/station/historical/tawes-v1-10min?parameters=RR,FF,FFX,DD,P,RF&{sid_params}&start={start_ts}&output_format=geojson'
     else:
         url = f'https://dataset.api.hub.geosphere.at/v1/station/current/tawes-v1-10min?parameters=RR,FF,FFX,DD,P,RF&{sid_params}&output_format=geojson'
     data = fetch_json(url, 'TAWES-Data')

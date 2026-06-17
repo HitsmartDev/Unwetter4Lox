@@ -12,9 +12,25 @@ LOGDIR="${LBHOMEDIR}/log/plugins/${LBPPLUGINDIR}"
 
 export LBHOMEDIR LBPPLUGINDIR
 
+_stop_all() {
+    # PID-Datei zuerst versuchen
+    if [ -f "$PIDFILE" ]; then
+        PID=$(cat "$PIDFILE")
+        if kill -0 "$PID" 2>/dev/null; then
+            kill "$PID" 2>/dev/null
+            sleep 1
+            # Notfall-SIGKILL wenn Prozess noch läuft
+            kill -0 "$PID" 2>/dev/null && kill -9 "$PID" 2>/dev/null || true
+        fi
+        rm -f "$PIDFILE"
+    fi
+    # Immer auch nach weiteren Instanzen suchen (verhindert Zombie-Prozesse nach fehlerhaftem Stop)
+    pkill -f "unwetter4lox_daemon.py" 2>/dev/null || true
+    sleep 1
+}
+
 case "$1" in
     start)
-        # Prüfung auf gesetzte Koordinaten
         CFGFILE="${LBHOMEDIR}/config/plugins/${LBPPLUGINDIR}/unwetter4lox.cfg"
         if [ ! -f "$CFGFILE" ]; then
             echo "Fehler: Konfigurationsdatei fehlt."
@@ -27,29 +43,28 @@ case "$1" in
             exit 1
         fi
 
+        # Sicherstellen dass keine alte Instanz mehr läuft
         if [ -f "$PIDFILE" ] && kill -0 "$(cat $PIDFILE)" 2>/dev/null; then
             echo "Daemon laeuft bereits (PID $(cat $PIDFILE))"
             exit 0
         fi
+        # Eventuelle Zombie-Prozesse aufräumen
+        pkill -f "unwetter4lox_daemon.py" 2>/dev/null || true
+        sleep 1
+
         mkdir -p "${LOGDIR}"
         chown loxberry:loxberry "${LOGDIR}" 2>/dev/null || true
         rm -f "$PIDFILE"
-        # Python-Daemon im Hintergrund starten; Logging übernimmt Python selbst via LoxBerry::Log
         nohup $PYTHON "$DAEMON" > /dev/null 2>&1 &
         echo $! > "$PIDFILE"
         echo "Unwetter4Lox gestartet (PID $!)"
         ;;
     stop)
-        if [ -f "$PIDFILE" ]; then
-            PID=$(cat "$PIDFILE")
-            kill "$PID" 2>/dev/null && echo "gestoppt" || echo "Prozess nicht gefunden"
-            rm -f "$PIDFILE"
-        else
-            pkill -f "unwetter4lox_daemon.py" 2>/dev/null || true
-        fi
+        _stop_all
+        echo "gestoppt"
         ;;
     restart)
-        $0 stop
+        _stop_all
         sleep 2
         $0 start
         ;;
