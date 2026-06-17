@@ -1,4 +1,4 @@
-"""Unwetter4Lox Daemon v0.9.2 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
+"""Unwetter4Lox Daemon v0.9.3 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math, re, traceback
 from datetime import datetime, timezone, timedelta
 from collections import deque
@@ -218,9 +218,9 @@ except: MQTT_OK = False
 mqtt_client     = None
 _mqtt_connected = threading.Event()
 
-# Watchdog: wann wurde zuletzt erfolgreich verbunden (für Watchdog-Prüfung)
-_mqtt_connect_time    = 0.0
-_mqtt_reconnect_count = 0
+_mqtt_connect_time        = 0.0
+_mqtt_reconnect_count     = 0
+_last_successful_publish  = 0.0   # Watchdog: wann hat zuletzt ein Publish geklappt
 
 # RC-Code Bedeutungen (MQTT 3.1.1)
 _MQTT_RC = {
@@ -296,6 +296,7 @@ def mqtt_connect():
         return False
 
 def publish(topic, value, retain=True):
+    global _last_successful_publish
     if not (mqtt_client and _mqtt_connected.is_set()):
         return False
     try:
@@ -308,6 +309,7 @@ def publish(topic, value, retain=True):
             log.warning(f'MQTT: Publish fehlgeschlagen ({topic}), RC={res.rc} – erzwinge Reconnect')
             _mqtt_connected.clear()
             return False
+        _last_successful_publish = time.time()
         return True
     except Exception as e:
         log.warning(f'MQTT: Publish Exception ({topic}): {e} – erzwinge Reconnect')
@@ -316,7 +318,7 @@ def publish(topic, value, retain=True):
 
 def fetch_json(url, provider):
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Unwetter4Lox/0.9.2'})
+        req = urllib.request.Request(url, headers={'User-Agent': 'Unwetter4Lox/0.9.3'})
         with urllib.request.urlopen(req, timeout=15) as r: return json.loads(r.read().decode())
     except Exception as e: log.error(f'HTTP {provider}: {e} | {url[:100]}'); return None
 
@@ -406,8 +408,10 @@ def fetch_tawes_data(station_ids, duration_min=0):
     if not station_ids: return {}
     ids = station_ids[:TAWES_MAX_STATIONS]; sid_params = '&'.join(f'station_ids={sid}' for sid in ids)
     if duration_min > 0:
-        start_ts = (datetime.now(timezone.utc) - timedelta(minutes=duration_min)).strftime('%Y-%m-%dT%H:%M')
-        url = f'https://dataset.api.hub.geosphere.at/v1/station/historical/tawes-v1-10min?parameters=RR,FF,FFX,DD,P,RF&{sid_params}&start={start_ts}&output_format=geojson'
+        # Historischer Endpoint braucht start UND end (beide mit Z-Suffix für UTC)
+        start_ts = (datetime.now(timezone.utc) - timedelta(minutes=duration_min)).strftime('%Y-%m-%dT%H:%MZ')
+        end_ts   = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%MZ')
+        url = f'https://dataset.api.hub.geosphere.at/v1/station/historical/tawes-v1-10min?parameters=RR,FF,FFX,DD,P,RF&{sid_params}&start={start_ts}&end={end_ts}&output_format=geojson'
     else:
         url = f'https://dataset.api.hub.geosphere.at/v1/station/current/tawes-v1-10min?parameters=RR,FF,FFX,DD,P,RF&{sid_params}&output_format=geojson'
     data = fetch_json(url, 'TAWES-Data')
@@ -556,13 +560,20 @@ def fetch_zamg():
 # ---------------------------------------------------------------------------
 def fetch_inca():
     n_steps = max(1, INCA_HORIZON // 15)
+    # Kein output_format – der timeseries/forecast-Endpoint liefert standardmäßig GeoJSON
     url = (f'https://dataset.api.hub.geosphere.at/v1/timeseries/forecast/nowcast-v1-15min-1km'
-           f'?parameters=FF,FX,RR,PT&lat={LAT}&lon={LON}&output_format=geojson')
+           f'?parameters=FF,FX,RR,PT&lat={LAT}&lon={LON}')
     data = fetch_json(url, 'INCA')
     if not data: return None
-    feats = data.get('features', [])
-    if not feats: return None
-    params = feats[0].get('properties', {}).get('parameters', {})
+    # Timeseries-Endpoint: kann als Feature-Array oder direkt als Feature kommen
+    if 'features' in data:
+        props = data['features'][0].get('properties', {}) if data['features'] else {}
+    elif 'properties' in data:
+        props = data.get('properties', {})
+    else:
+        log.error(f'INCA: Unbekannte Antwortstruktur – Keys: {list(data.keys())}')
+        return None
+    params = props.get('parameters', props)   # Fallback: Params direkt im Root
     def _s(k, m=1.0):
         out = []
         for v in params.get(k, {}).get('data', [])[:n_steps]:
@@ -793,7 +804,7 @@ def publish_all(status_msg, tawes=None, zamg=None, inca=None, alarm=None, prev=N
 MQTT_WATCHDOG_TIMEOUT = 600
 
 def run():
-    log.info(f'Unwetter4Lox v0.9.2 gestartet | Interval={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT}')
+    log.info(f'Unwetter4Lox v0.9.3 gestartet | Interval={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT}')
     try:
         with open(PID_FILE, 'w') as f: f.write(str(os.getpid()))
     except: pass
@@ -816,13 +827,16 @@ def run():
         try:
             # --- MQTT-Watchdog ---
             if not _mqtt_connected.is_set():
-                elapsed = time.time() - _mqtt_connect_time if _mqtt_connect_time > 0 else 0
-                log.info(f'MQTT: Nicht verbunden (seit {elapsed:.0f}s) – Reconnect...')
+                elapsed = time.time() - _last_successful_publish if _last_successful_publish > 0 else 0
+                log.info(f'MQTT: Nicht verbunden (letztes Publish vor {elapsed:.0f}s) – Reconnect...')
                 mqtt_connect()
-            elif _mqtt_connect_time > 0 and (time.time() - _mqtt_connect_time) > MQTT_WATCHDOG_TIMEOUT:
+            elif (_last_successful_publish > 0 and
+                  _mqtt_connected.is_set() and
+                  (time.time() - _last_successful_publish) > MQTT_WATCHDOG_TIMEOUT):
+                # Verbunden laut Flag, aber seit WATCHDOG_TIMEOUT kein erfolgreiches Publish → Zombie-TCP
                 log.warning(
-                    f'MQTT-Watchdog: Verbindung seit {(time.time()-_mqtt_connect_time)/60:.0f}min '
-                    f'nicht erneuert (Reconnects gesamt: {_mqtt_reconnect_count}) – erzwinge Reconnect'
+                    f'MQTT-Watchdog: Kein Publish seit {(time.time()-_last_successful_publish)/60:.0f}min '
+                    f'(Reconnects gesamt: {_mqtt_reconnect_count}) – erzwinge Reconnect'
                 )
                 _mqtt_connected.clear()
                 mqtt_connect()
