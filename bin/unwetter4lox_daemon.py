@@ -49,7 +49,7 @@ def get_loxberry_loglevel():
 CURRENT_LOGLEVEL = get_loxberry_loglevel()
 
 if LB_SDK:
-    log = loxberry.log.Logger(name='Daemon', package=LBPPLUGINDIR, logdir=LOGDIR, max_log_files=20)
+    log = loxberry.log.Logger(name='Daemon', package=LBPPLUGINDIR, logdir=LOGDIR, max_log_files=7)
     log.start()
     LOGFILE = log.filename
     try:
