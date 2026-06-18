@@ -1,5 +1,5 @@
 """Unwetter4Lox Daemon v0.9.9 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
-import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math, re, traceback
+import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math, re, traceback, socket
 from datetime import datetime, timezone, timedelta
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -216,6 +216,9 @@ try:
     MQTT_OK = True
 except: MQTT_OK = False
 
+# Client-ID: Hostname-Suffix verhindert Konflikte mit anderen Instanzen/Geräten
+_MQTT_CLIENT_ID = f"unwetter4lox-{socket.gethostname().split('.')[0][:12].replace(' ', '-')}"
+
 mqtt_client     = None
 _mqtt_connected = threading.Event()
 
@@ -279,9 +282,9 @@ def mqtt_connect():
     _mqtt_connected.clear()
     try:
         try:
-            c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, client_id='unwetter4lox', clean_session=True)
+            c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, client_id=_MQTT_CLIENT_ID, clean_session=True)
         except:
-            c = mqtt.Client(client_id='unwetter4lox', clean_session=True)
+            c = mqtt.Client(client_id=_MQTT_CLIENT_ID, clean_session=True)
         c.on_connect    = _on_connect
         c.on_disconnect = _on_disconnect
         # Paho Auto-Reconnect: nach Disconnect wartet paho 5–60s und reconnectet selbst.
@@ -916,7 +919,7 @@ def run():
         time.sleep(1)
     except Exception: pass
 
-    log.info(f'Unwetter4Lox v0.9.9 gestartet | Interval={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT}')
+    log.info(f'Unwetter4Lox v0.9.9 gestartet | Interval={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID}')
     try:
         with open(PID_FILE, 'w') as f: f.write(str(my_pid))
     except: pass
