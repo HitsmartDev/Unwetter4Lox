@@ -35,7 +35,7 @@ code { background:#f0f0f0; padding:1px 4px; border-radius:3px; font-size:10px; f
     <li><b>TAWES 360°</b> – Live-Messdaten von Wetterstationen im Umkreis → Regen-ETA, Wind-Kaskade, Lokal-Regen, Gewitter-Vorhersage</li>
 </ul>
 <p>Alle Daten landen als MQTT-Nachrichten auf deinem LoxBerry-Broker und können direkt in Loxone-Logiken (Virtual Input) verwendet werden.</p>
-<p style="font-size:11px;color:#888">Aktuelle Version: <b>0.4.28</b> | <a href="https://github.com/HitsmartDev/Unwetter4Lox" target="_blank">GitHub</a></p>
+<p style="font-size:11px;color:#888">Aktuelle Version: <b>0.9.8</b> | <a href="https://github.com/HitsmartDev/Unwetter4Lox" target="_blank">GitHub</a></p>
 </div>
 
 <!-- DATENQUELLEN -->

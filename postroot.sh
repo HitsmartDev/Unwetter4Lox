@@ -141,22 +141,27 @@ fi
 # /etc/cron.d/ Eintrag: zuverlässiger als user-crontab, überlebt Updates
 # @reboot:  startet Daemon 120s nach Systemstart (MQTT-Broker braucht Zeit)
 # 0 3 *:    täglicher Neustart um 03:00 Uhr (bereinigt Langzeit-MQTT-Probleme)
+# */5 *:    Watchdog – prüft ob Daemon noch läuft, bereinigt State bei Absturz
 CROND="/etc/cron.d/${PLUGIN}"
+PIDFILE="${LBHOMEDIR}/log/plugins/${PLUGIN}/daemon.pid"
+STATEFILE="${LBHOMEDIR}/data/plugins/${PLUGIN}/state.json"
 if [ -f "${DAEMONSCRIPT}" ]; then
     cat > "${CROND}" << CRONEOF
-# Unwetter4Lox – Autostart nach Reboot + täglicher Restart
+# Unwetter4Lox – Autostart + Watchdog + täglicher Restart
 # Generiert von postroot.sh – nicht manuell bearbeiten
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 
 @reboot root sleep 120 && ${DAEMONSCRIPT} restart >/dev/null 2>&1
 0 3 * * * root ${DAEMONSCRIPT} restart >/dev/null 2>&1
+*/5 * * * * root if [ -f "${PIDFILE}" ] && ! kill -0 "\$(cat ${PIDFILE})" 2>/dev/null; then rm -f "${PIDFILE}" "${STATEFILE}"; ${DAEMONSCRIPT} start >/dev/null 2>&1; fi
 CRONEOF
     chmod 0644 "${CROND}"
     chown root:root "${CROND}" 2>/dev/null
     echo "<OK> Cron-Jobs angelegt: ${CROND}"
     echo "<OK>   @reboot  – Autostart 120s nach Systemstart"
     echo "<OK>   03:00    – Täglicher Restart (bereinigt MQTT-Langzeitprobleme)"
+    echo "<OK>   */5 min  – Watchdog: State löschen + Neustart bei Daemon-Absturz"
 else
     echo "<WARNING> Daemon-Script nicht gefunden – Cron konnte nicht angelegt werden: ${DAEMONSCRIPT}"
 fi

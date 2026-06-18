@@ -571,57 +571,80 @@ def fetch_zamg():
 # INCA Nowcast
 # ---------------------------------------------------------------------------
 def fetch_inca():
+    """INCA Nowcast – je Parameter ein separater API-Aufruf (bewährter Ansatz aus v0.4.32).
+    URL-Format: lat_lon=LAT%2CLON&parameters={param}&output_format=geojson"""
+    if not INCA_ENABLED: return {}
+    now = datetime.now(tz=timezone.utc)
     n_steps = max(1, INCA_HORIZON // 15)
-    # GeoSphere timeseries/forecast erwartet lat_lon=LAT,LON (kombiniert, nicht lat=&lon= getrennt)
-    url = (f'https://dataset.api.hub.geosphere.at/v1/timeseries/forecast/nowcast-v1-15min-1km'
-           f'?parameters=FF,FX,RR,PT&lat_lon={LAT},{LON}')
-    data = fetch_json(url, 'INCA')
-    if not data: return None
-    # Timeseries-Endpoint: kann als Feature-Array oder direkt als Feature kommen
-    if 'features' in data:
-        props = data['features'][0].get('properties', {}) if data['features'] else {}
-    elif 'properties' in data:
-        props = data.get('properties', {})
-    else:
-        log.error(f'INCA: Unbekannte Antwortstruktur – Keys: {list(data.keys())}')
+    res = dict(
+        ff_jetzt=0.0, fx_jetzt=0.0, fx_max_30min=0.0, fx_max_60min=0.0,
+        rr_jetzt=0.0, pt_jetzt=255, pt_name=L['pt_none'],
+        pt_bald=255, pt_bald_name='',
+        bald_regen=0, bald_hagel=0, bald_graupel=0,
+        bald_sturm_30=0, bald_sturm_60=0, minuten_bis_regen=-1, regen_alarm=0,
+    )
+    _fehler = []
+    for param in ['ff', 'fx', 'rr', 'pt']:
+        url = (f'https://dataset.api.hub.geosphere.at/v1/timeseries/forecast/nowcast-v1-15min-1km'
+               f'?lat_lon={LAT}%2C{LON}&parameters={param}&output_format=geojson')
+        data = fetch_json(url, f'INCA {param}')
+        if not data:
+            _fehler.append(param)
+            continue
+        ts_list = data.get('timestamps', [])
+        features = data.get('features', [])
+        if not features:
+            _fehler.append(param)
+            continue
+        values = features[0].get('properties', {}).get('parameters', {}).get(param, {}).get('data', [])
+        if param == 'ff':
+            res['ff_jetzt'] = round(float(values[0]) * 3.6, 1) if values else 0.0
+        elif param == 'fx':
+            serie = [round(float(v) * 3.6, 1) for v in values[:n_steps] if v is not None]
+            res['fx_jetzt'] = serie[0] if serie else 0.0
+            m30 = m60 = 0.0
+            for i, ts in enumerate(ts_list[:n_steps]):
+                if i >= len(serie): break
+                v = serie[i]; t = _parse_iso(ts)  # t ist Unix-Timestamp als int
+                if t <= now.timestamp() + 1800 and v > m30: m30 = v
+                if t <= now.timestamp() + 3600 and v > m60: m60 = v
+            res['fx_max_30min'] = round(m30, 1); res['fx_max_60min'] = round(m60, 1)
+            res['bald_sturm_30'] = int(m30 >= BOEN_ALARM); res['bald_sturm_60'] = int(m60 >= BOEN_ALARM)
+        elif param == 'rr':
+            serie = [round(float(v), 2) if v is not None else 0.0 for v in values[:n_steps]]
+            res['rr_jetzt'] = serie[0] if serie else 0.0
+            res['regen_alarm'] = int(res['rr_jetzt'] >= REGEN_ALARM)
+            for i, ts in enumerate(ts_list[:n_steps]):
+                if i < len(serie) and serie[i] > 0.0:
+                    t = _parse_iso(ts)  # int Unix-Timestamp
+                    dt = max(0, int((t - now.timestamp()) / 60))
+                    res['minuten_bis_regen'] = dt; res['bald_regen'] = int(dt <= 30)
+                    res['_regen_idx'] = i
+                    break
+        elif param == 'pt':
+            serie = [int(v) if v is not None else 255 for v in values[:n_steps]]
+            res['pt_jetzt'] = serie[0] if serie else 255
+            res['pt_name'] = PT_NAME.get(res['pt_jetzt'], 'unbekannt')
+            ri = res.get('_regen_idx', -1)
+            if 0 <= ri < len(serie) and serie[ri] not in (255,):
+                res['pt_bald'] = serie[ri]; res['pt_bald_name'] = PT_NAME.get(serie[ri], 'Regen')
+            for i, ts in enumerate(ts_list[:n_steps]):
+                if i < len(serie):
+                    t = _parse_iso(ts)  # int Unix-Timestamp
+                    if t <= now.timestamp() + 3600:
+                        if serie[i] == 5: res['bald_hagel'] = 1
+                        if serie[i] == 4: res['bald_graupel'] = 1
+    if len(_fehler) == 4:
+        log.error('INCA: Alle 4 Parameter fehlgeschlagen')
         return None
-    params = props.get('parameters', props)   # Fallback: Params direkt im Root
-    def _s(k, m=1.0):
-        out = []
-        for v in params.get(k, {}).get('data', [])[:n_steps]:
-            try:
-                fv = float(v)
-                out.append(None if (math.isnan(fv) or math.isinf(fv) or fv < 0) else round(fv * m, 1))
-            except: out.append(None)
-        return out
-    def _sv(v): return v if v is not None else 0.0
-    ff_s = _s('FF', 3.6); fx_s = _s('FX', 3.6); rr_s = _s('RR'); pt_s = _s('PT')
-    fx_now = _sv(fx_s[0]) if fx_s else 0.0
-    ff_now = _sv(ff_s[0]) if ff_s else 0.0
-    rr_now = _sv(rr_s[0]) if rr_s else 0.0
-    pt_now = int(_sv(pt_s[0])) if pt_s else 255
-    n30 = max(1, min(2, len(fx_s)))
-    fx30 = round(max((_sv(v) for v in fx_s[:n30]), default=0.0), 1)
-    fx60 = round(max((_sv(v) for v in fx_s),       default=0.0), 1)
-    min_regen = -1; pt_bald = 255
-    for i, rr in enumerate(rr_s):
-        if (_sv(rr)) > 0.05:
-            min_regen = i * 15
-            if pt_s and i < len(pt_s): pt_bald = int(_sv(pt_s[i]))
-            break
-    rr_r = round(rr_now, 1)
-    log.info(f'INCA Nowcast: OK | Böen {fx60} km/h | Regen {rr_r} mm/h | ETA {min_regen}min | PT={PT_NAME.get(pt_now, pt_now)}')
-    return {
-        'fx':fx_now, 'ff':ff_now, 'rr':rr_r, 'regen_alarm':int(rr_now >= REGEN_ALARM),
-        'pt':pt_now, 'pt_name':PT_NAME.get(pt_now, str(pt_now)),
-        'pt_bald':pt_bald, 'pt_bald_name':(PT_NAME.get(pt_bald,'') if pt_bald != 255 else ''),
-        'fx_max_30min':fx30, 'fx_max_60min':fx60,
-        'bald_regen':int(0 <= min_regen <= 30), 'bald_hagel':int(any(int(_sv(v))==5 for v in pt_s)),
-        'bald_graupel':int(any(int(_sv(v))==4 for v in pt_s)),
-        'bald_sturm_30':int(fx30 >= BOEN_ALARM), 'bald_sturm_60':int(fx60 >= BOEN_ALARM),
-        'minuten_bis_regen':min_regen,
-        'letzter_abruf':datetime.now().astimezone().strftime('%d.%m.%Y %H:%M:%S'), '_api_ok':True,
-    }
+    if _fehler:
+        log.warning(f'INCA: {len(_fehler)}/4 Parameter fehlgeschlagen ({", ".join(_fehler)}) – Teildaten verwendet')
+    fx60 = res['fx_max_60min']
+    log.info(f'INCA OK | Böen {fx60} km/h | Regen {res["rr_jetzt"]} mm/h | ETA {res["minuten_bis_regen"]}min | PT={res["pt_name"]}')
+    res.pop('_regen_idx', None)
+    res['letzter_abruf'] = datetime.now().astimezone().strftime('%d.%m.%Y %H:%M:%S')
+    res['_api_ok'] = True
+    return res
 
 # ---------------------------------------------------------------------------
 # Alarm-Aggregation (ZAMG + INCA + TAWES → alarm/ Topics)
@@ -648,7 +671,7 @@ def build_alarm(zamg, inca, tawes, prev_alarm):
     a_r = 0; rq = '–'
     zr = _stufe_al(z.get('regen',{}).get('stufe',0))
     if zr: a_r = max(a_r, zr); rq = 'ZAMG'
-    rr = i.get('rr', 0) or 0
+    rr = i.get('rr_jetzt', 0) or 0
     ir = _mm_al(rr)
     if ir: a_r = max(a_r, ir); rq = f'INCA ({rr}mm/h)'
     up_mm = t.get('regen_upstream_mm', 0) or 0
@@ -680,7 +703,7 @@ def build_alarm(zamg, inca, tawes, prev_alarm):
 
 def _notification_inca(i):
     if not i: return ''
-    fx60 = i.get('fx_max_60min',0) or 0; rr = i.get('rr',0) or 0
+    fx60 = i.get('fx_max_60min',0) or 0; rr = i.get('rr_jetzt',0) or 0
     parts = []
     if i.get('bald_sturm_30'): parts.append(L['sturm_30'].format(v=round(fx60,0)))
     elif i.get('bald_sturm_60'): parts.append(L['sturm_60'].format(v=round(fx60,0)))
@@ -754,9 +777,14 @@ def publish_all(status_msg, tawes=None, zamg=None, inca=None, alarm=None, prev=N
             publish(f'zamg/{typ}/notification',d.get('notification', ''))
         publish('notification/geosphere', zamg.get('notification_geosphere', L['no_warns']))
 
-    # INCA
+    # INCA – MQTT-Topics behalten alte Namen (inca/fx, inca/ff, inca/rr, inca/pt)
+    # Interne Feldnamen sind jetzt fx_jetzt, ff_jetzt, rr_jetzt, pt_jetzt
     if inca:
-        for k in ('fx','ff','rr','regen_alarm','pt','pt_name','pt_bald','pt_bald_name',
+        publish('inca/fx',       inca.get('fx_jetzt', 0))
+        publish('inca/ff',       inca.get('ff_jetzt', 0))
+        publish('inca/rr',       inca.get('rr_jetzt', 0))
+        publish('inca/pt',       inca.get('pt_jetzt', 255))
+        for k in ('regen_alarm','pt_name','pt_bald','pt_bald_name',
                   'fx_max_30min','fx_max_60min','bald_regen','bald_hagel','bald_graupel',
                   'bald_sturm_30','bald_sturm_60','minuten_bis_regen','letzter_abruf'):
             publish(f'inca/{k}', inca.get(k, '' if k in ('pt_name','pt_bald_name','letzter_abruf') else 0))
@@ -783,33 +811,56 @@ def publish_all(status_msg, tawes=None, zamg=None, inca=None, alarm=None, prev=N
         for k in ('wind_quelle','regen_quelle','zusammenfassung'):
             publish(f'alarm/{k}', alarm.get(k, '–'))
 
-    # Notifications
+    # Notifications – Text auch für state.json merken
+    notif_alle = ''
+    nt_inca = _notification_inca(inca)   if inca  else ''
+    nt_tawes = _notification_tawes(tawes) if tawes else ''
     if a_ges >= 1:
-        nt_inca  = _notification_inca(inca)   if inca  else ''
-        nt_tawes = _notification_tawes(tawes) if tawes else ''
         if nt_inca:  publish('notification/inca',  nt_inca)
         if nt_tawes: publish('notification/tawes', nt_tawes)
-        # notification/alle: nur Quellen die selbst zum Alarm beitragen
         alle = []
         if zamg  and zamg.get('irgendwas_aktiv'): alle.append(zamg.get('notification_geosphere',''))
         if inca  and (alarm.get('wind',0) and 'INCA' in alarm.get('wind_quelle','')  or
                       alarm.get('regen',0) and 'INCA' in alarm.get('regen_quelle','')): alle.append(nt_inca)
         if tawes and (tawes.get('sturm_upstream') or tawes.get('wind_kaskade') or
                       tawes.get('regen_upstream_mm',0) or tawes.get('regen_lokal')): alle.append(nt_tawes)
-        publish('notification/alle', ' ── '.join(p for p in alle if p))
+        notif_alle = ' ── '.join(p for p in alle if p)
+        publish('notification/alle', notif_alle)
     elif entw:
-        for t in ('notification/inca','notification/alle'): publish(t, L['entwarnung'])
+        notif_alle = L['entwarnung']
+        for t in ('notification/inca','notification/alle'): publish(t, notif_alle)
         publish('notification/tawes', '')
     else:
         for t in ('notification/inca','notification/tawes','notification/alle'): publish(t, '')
 
+    # INCA: Felder heißen direkt fx_jetzt/ff_jetzt/rr_jetzt/pt_jetzt – keine Aliases nötig
+    inca_st = {k: v for k, v in (inca or {}).items() if k != '_api_ok'}
+
+    # TAWES: alle_stationen auf UI-relevante Felder reduzieren (Stationsliste in index.php)
+    tawes_st = {k: v for k, v in (tawes or {}).items() if k != '_api_ok'}
+    tawes_st['alle_stationen'] = [
+        {'name': s.get('name',''), 'dist_km': s.get('dist_km', 0),
+         'bearing_name': s.get('bearing_name', '–'), 'ist_upstream': s.get('ist_upstream', False),
+         'FF_kmh': s.get('FF_kmh'), 'FFX_kmh': s.get('FFX_kmh'), 'RR': s.get('RR')}
+        for s in (tawes or {}).get('alle_stationen', [])
+    ]
+
     # State speichern
     save_state({
         'letztes_update': ts_iso, 'letzter_abruf_epoch': ts_epoch, 'status': status_msg,
-        'zamg':  {k: v for k, v in (zamg  or {}).items() if k not in ('_api_ok', 'alle_stationen')},
-        'inca':  {k: v for k, v in (inca  or {}).items() if k != '_api_ok'},
+        # Top-Level: index.php liest $state['akutwarnung'] etc. direkt (nicht verschachtelt)
+        'akutwarnung':          (zamg or {}).get('akutwarnung', 0),
+        'irgendwas_aktiv':      (zamg or {}).get('irgendwas_aktiv', 0),
+        'max_stufe':            (zamg or {}).get('max_stufe', 0),
+        'zamg_letztes_update':  (zamg or {}).get('letzter_abruf', ''),
+        'inca_letztes_update':  (inca or {}).get('letzter_abruf', ''),
+        'tawes_letztes_update': (tawes or {}).get('letztes_update', ''),
+        'notification_alle':    notif_alle,
+        # Verschachtelt
+        'zamg':  {k: v for k, v in (zamg or {}).items() if k != '_api_ok'},
+        'inca':  inca_st,
         'alarm': alarm or {},
-        'tawes': {k: v for k, v in (tawes or {}).items() if k not in ('_api_ok', 'alle_stationen')},
+        'tawes': tawes_st,
     })
 
 # Watchdog: Hard Reset wenn seit 30min kein erfolgreiches Publish (Zombie-TCP-Erkennung)

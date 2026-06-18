@@ -1,4 +1,4 @@
-# Unwetter4Lox v0.4.28
+# Unwetter4Lox v0.9.8
 
 **LoxBerry-Plugin für automatische Unwettererkennung und Wetterautomatisierung.**
 
@@ -400,6 +400,16 @@ Aktion:   Carport-Tor schließen, Push senden
 ---
 
 ## Technische Details
+
+### Daemon-Betrieb & Zuverlässigkeit
+
+**Autostart nach Reboot:** Der Daemon startet automatisch 120 Sekunden nach dem Systemstart – die Verzögerung stellt sicher dass der MQTT-Broker schon läuft. Eingerichtet via `/etc/cron.d/unwetter4lox` (root-owned, überleben Updates).
+
+**Täglicher Neustart:** Jeden Tag um 03:00 Uhr wird der Daemon automatisch neu gestartet. Dies bereinigt potenzielle MQTT-Langzeitprobleme (stale TCP-Verbindungen die nach mehreren Tagen auftreten können).
+
+**Watchdog (alle 5 min):** Ein Cron-Job prüft alle 5 Minuten ob der Daemon noch läuft. Bei einem Absturz werden `daemon.pid` und `state.json` automatisch gelöscht und der Daemon neu gestartet. Die Datei `state.json` wird gelöscht damit die UI keine veralteten Wetterdaten anzeigt.
+
+**MQTT-Robustheit:** paho-mqtt `loop_start()` + `reconnect_delay_set(10s, 120s)` sorgen für automatische Wiederverbindung bei Netzwerk-Unterbrechungen. Ein 30-Minuten-Watchdog erkennt "stille" TCP-Verbindungen (Zombie-Sessions) und erzwingt einen Hard-Reset.
 
 ### TAWES 360° – So funktioniert es
 
