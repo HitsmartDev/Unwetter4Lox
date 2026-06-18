@@ -1,7 +1,8 @@
-"""Unwetter4Lox Daemon v0.9.5 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
+"""Unwetter4Lox Daemon v0.9.9 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math, re, traceback
 from datetime import datetime, timezone, timedelta
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # LoxBerry SDK imports
 try:
@@ -221,6 +222,7 @@ _mqtt_connected = threading.Event()
 _mqtt_connect_time        = 0.0
 _mqtt_reconnect_count     = 0
 _last_successful_publish  = 0.0   # Watchdog: wann hat zuletzt ein Publish geklappt
+_disconnect_since         = 0.0   # Watchdog: seit wann sind wir getrennt
 
 # RC-Code Bedeutungen (MQTT 3.1.1)
 _MQTT_RC = {
@@ -233,10 +235,11 @@ _MQTT_RC = {
 }
 
 def _on_connect(c, u, f, rc):
-    global _mqtt_connect_time, _mqtt_reconnect_count
+    global _mqtt_connect_time, _mqtt_reconnect_count, _disconnect_since
     if rc == 0:
         _mqtt_connected.set()
         _mqtt_connect_time = time.time()
+        _disconnect_since  = 0.0
         if _mqtt_reconnect_count > 0:
             log.info(f'MQTT: Verbunden mit {MQTT_BROKER}:{MQTT_PORT} (Reconnect #{_mqtt_reconnect_count})')
         else:
@@ -246,14 +249,16 @@ def _on_connect(c, u, f, rc):
         log.error(f'MQTT: Verbindung fehlgeschlagen – {reason} (RC={rc}) | Broker={MQTT_BROKER}:{MQTT_PORT}')
 
 def _on_disconnect(c, u, rc):
-    global _mqtt_reconnect_count
+    global _mqtt_reconnect_count, _disconnect_since
     _mqtt_connected.clear()
     _mqtt_reconnect_count += 1
+    if _disconnect_since == 0.0:
+        _disconnect_since = time.time()
     if rc == 0:
         log.info(f'MQTT: Verbindung sauber getrennt (Reconnect #{_mqtt_reconnect_count})')
     else:
         reason = _MQTT_RC.get(rc, f'unbekannt RC={rc}')
-        log.warning(f'MQTT: Verbindung unerwartet getrennt – {reason} (RC={rc}) | Reconnect #{_mqtt_reconnect_count} folgt automatisch')
+        log.warning(f'MQTT: Getrennt RC={rc} ({reason}) | Reconnect #{_mqtt_reconnect_count}')
 
 def mqtt_connect():
     """Erstellt neuen MQTT-Client und verbindet. Paho's loop_start() übernimmt
@@ -279,9 +284,9 @@ def mqtt_connect():
             c = mqtt.Client(client_id='unwetter4lox', clean_session=True)
         c.on_connect    = _on_connect
         c.on_disconnect = _on_disconnect
-        # Paho Auto-Reconnect: nach Disconnect wartet paho 10–120s und reconnectet selbst.
+        # Paho Auto-Reconnect: nach Disconnect wartet paho 5–60s und reconnectet selbst.
         # Kein manueller Reconnect im Haupt-Loop nötig – das verhindert Client-ID-Konflikte.
-        c.reconnect_delay_set(min_delay=10, max_delay=120)
+        c.reconnect_delay_set(min_delay=5, max_delay=60)
         lwt_topic = f'{TOPIC_PREFIX}/status'
         c.will_set(lwt_topic, L['status_err'].format(v='Offline (LWT)'), qos=1, retain=True)
         if MQTT_USER: c.username_pw_set(MQTT_USER, MQTT_PASS)
@@ -571,7 +576,7 @@ def fetch_zamg():
 # INCA Nowcast
 # ---------------------------------------------------------------------------
 def fetch_inca():
-    """INCA Nowcast – je Parameter ein separater API-Aufruf (bewährter Ansatz aus v0.4.32).
+    """INCA Nowcast – 4 Parameter PARALLEL abrufen (max ~15s statt 60s bei API-Problemen).
     URL-Format: lat_lon=LAT%2CLON&parameters={param}&output_format=geojson"""
     if not INCA_ENABLED: return {}
     now = datetime.now(tz=timezone.utc)
@@ -584,10 +589,27 @@ def fetch_inca():
         bald_sturm_30=0, bald_sturm_60=0, minuten_bis_regen=-1, regen_alarm=0,
     )
     _fehler = []
-    for param in ['ff', 'fx', 'rr', 'pt']:
-        url = (f'https://dataset.api.hub.geosphere.at/v1/timeseries/forecast/nowcast-v1-15min-1km'
-               f'?lat_lon={LAT}%2C{LON}&parameters={param}&output_format=geojson')
-        data = fetch_json(url, f'INCA {param}')
+    _base = 'https://dataset.api.hub.geosphere.at/v1/timeseries/forecast/nowcast-v1-15min-1km'
+
+    def _req(param):
+        url = f'{_base}?lat_lon={LAT}%2C{LON}&parameters={param}&output_format=geojson'
+        return fetch_json(url, f'INCA {param}')
+
+    # Alle 4 API-Calls gleichzeitig starten
+    _raw = {}
+    with ThreadPoolExecutor(max_workers=4) as _ex:
+        _futs = {_ex.submit(_req, p): p for p in ('ff', 'fx', 'rr', 'pt')}
+        try:
+            for _fut in as_completed(_futs, timeout=20):
+                _raw[_futs[_fut]] = _fut.result()
+        except Exception:
+            pass
+    for p in ('ff', 'fx', 'rr', 'pt'):
+        if p not in _raw:
+            _raw[p] = None
+
+    for param in ('ff', 'fx', 'rr', 'pt'):
+        data = _raw[param]
         if not data:
             _fehler.append(param)
             continue
@@ -756,10 +778,20 @@ def publish_all(status_msg, tawes=None, zamg=None, inca=None, alarm=None, prev=N
     now = datetime.now().astimezone(); ts_iso = now.strftime('%d.%m.%Y %H:%M:%S'); ts_epoch = int(now.timestamp())
     publish('letzter_abruf_datum',  ts_iso); publish('letzter_abruf_epoch', ts_epoch); publish('status/last_seen', ts_epoch)
     publish('status', L['status_ok'] if status_msg == 'OK' else L['status_err'].format(v=status_msg), retain=True)
+    zamg_ok  = 1 if (zamg  and zamg.get('_api_ok'))        else 0
+    inca_ok  = 1 if (inca  and inca.get('_api_ok'))        else 0
+    tawes_ok = 1 if (tawes and tawes.get('_api_ok', True)) else 0
+    publish('status/zamg_ok',         zamg_ok)
+    publish('status/inca_ok',         inca_ok)
+    publish('status/tawes_ok',        tawes_ok)
     publish('status/mqtt_reconnects', _mqtt_reconnect_count)
-    publish('status/zamg_ok',  1 if (zamg  and zamg.get('_api_ok'))       else 0)
-    publish('status/inca_ok',  1 if (inca  and inca.get('_api_ok'))       else 0)
-    publish('status/tawes_ok', 1 if (tawes and tawes.get('_api_ok', True)) else 0)
+    # Fehlertext für Loxone Push-Notifications (leer = alles OK)
+    fehler_teile = []
+    if not zamg_ok:  fehler_teile.append('ZAMG: API-Fehler')
+    if not inca_ok:  fehler_teile.append('INCA: API-Fehler')
+    if not tawes_ok: fehler_teile.append('TAWES: API-Fehler')
+    publish('status/api_fehler', ' | '.join(fehler_teile), retain=True)
+    publish('status/api_ok', 1 if not fehler_teile else 0)
 
     # ZAMG
     if zamg:
@@ -867,9 +899,26 @@ def publish_all(status_msg, tawes=None, zamg=None, inca=None, alarm=None, prev=N
 MQTT_WATCHDOG_TIMEOUT = 1800
 
 def run():
-    log.info(f'Unwetter4Lox v0.9.5 gestartet | Interval={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT}')
+    # Vor dem Start: sicherstellen dass keine ältere Python-Instanz noch läuft
+    # (verhindert Client-ID-Konflikt → MQTT-Disconnect-Loop alle 5s)
+    my_pid = os.getpid()
     try:
-        with open(PID_FILE, 'w') as f: f.write(str(os.getpid()))
+        result = subprocess.run(
+            ['pgrep', '-f', 'unwetter4lox_daemon.py'],
+            capture_output=True, text=True
+        )
+        for pid_str in result.stdout.strip().split():
+            other = int(pid_str)
+            if other != my_pid:
+                log.warning(f'Alte Instanz PID {other} gefunden – wird beendet')
+                try: os.kill(other, signal.SIGTERM)
+                except: pass
+        time.sleep(1)
+    except Exception: pass
+
+    log.info(f'Unwetter4Lox v0.9.9 gestartet | Interval={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT}')
+    try:
+        with open(PID_FILE, 'w') as f: f.write(str(my_pid))
     except: pass
 
     # TAWES-Cache beim Start löschen – frische Stationsdaten erzwingen
@@ -890,19 +939,25 @@ def run():
         try:
             # --- MQTT-Status-Check ---
             # Paho's loop_start() + reconnect_delay_set() übernehmen alle Reconnects automatisch.
-            # Wir greifen NUR im Extremfall ein (Zombie-TCP nach 30min ohne Publish).
+            # Hard Reset nach 5min Dauertrennung (z.B. Client-ID-Konflikt zweier Instanzen)
+            # oder nach 30min ohne erfolgreiches Publish (Zombie-TCP-Erkennung).
             if not _mqtt_connected.is_set():
-                elapsed = time.time() - _last_successful_publish if _last_successful_publish > 0 else 0
-                log.info(f'MQTT: Warte auf Verbindung (paho reconnectet – letztes Publish vor {elapsed:.0f}s)')
+                elapsed_disco = time.time() - _disconnect_since if _disconnect_since > 0 else 0
+                elapsed_pub   = time.time() - _last_successful_publish if _last_successful_publish > 0 else 0
+                log.info(f'MQTT: Warte auf Verbindung (seit {elapsed_disco:.0f}s getrennt, '
+                         f'letztes Publish vor {elapsed_pub:.0f}s, Reconnects: {_mqtt_reconnect_count})')
+                if elapsed_disco > 300:
+                    # 5min dauerhaft getrennt → Hard Reset (deckt Client-ID-Konflikt und Broker-Restart ab)
+                    log.warning(f'MQTT: {elapsed_disco/60:.1f}min dauerhaft getrennt – Hard Reset')
+                    mqtt_connect()
             elif (_last_successful_publish > 0 and
                   (time.time() - _last_successful_publish) > MQTT_WATCHDOG_TIMEOUT):
-                # Extremfall: seit 30min kein erfolgreiches Publish obwohl connected-Flag gesetzt
-                # → Zombie-TCP-Verbindung: Full Hard Reset (kein normaler paho-Reconnect mehr)
+                # Zombie-TCP: connected-Flag gesetzt, aber seit 30min kein Publish
                 log.warning(
                     f'MQTT-Watchdog: Kein Publish seit {(time.time()-_last_successful_publish)/60:.0f}min '
                     f'– Hard Reset (Reconnects gesamt: {_mqtt_reconnect_count})'
                 )
-                mqtt_connect()  # Nur in diesem seltenen Extremfall
+                mqtt_connect()
 
             status = 'OK'
 

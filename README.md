@@ -1,4 +1,4 @@
-# Unwetter4Lox v0.9.8
+# Unwetter4Lox v0.9.9
 
 **LoxBerry-Plugin für automatische Unwettererkennung und Wetterautomatisierung.**
 
@@ -409,7 +409,11 @@ Aktion:   Carport-Tor schließen, Push senden
 
 **Watchdog (alle 5 min):** Ein Cron-Job prüft alle 5 Minuten ob der Daemon noch läuft. Bei einem Absturz werden `daemon.pid` und `state.json` automatisch gelöscht und der Daemon neu gestartet. Die Datei `state.json` wird gelöscht damit die UI keine veralteten Wetterdaten anzeigt.
 
-**MQTT-Robustheit:** paho-mqtt `loop_start()` + `reconnect_delay_set(10s, 120s)` sorgen für automatische Wiederverbindung bei Netzwerk-Unterbrechungen. Ein 30-Minuten-Watchdog erkennt "stille" TCP-Verbindungen (Zombie-Sessions) und erzwingt einen Hard-Reset.
+**MQTT-Robustheit (v0.9.9):** paho-mqtt `loop_start()` + `reconnect_delay_set(5s, 60s)` sorgen für automatische Wiederverbindung. Der Daemon erkennt beim Start bestehende Instanzen und beendet diese (verhindert Client-ID-Konflikte). Ein 5-Minuten-Watchdog im Python-Daemon triggert bei dauerhafter Trennung einen Hard-Reset. Zombie-TCP-Verbindungen werden nach 30 Minuten erkannt.
+
+**INCA Parallel-Abruf (v0.9.9):** Die 4 INCA API-Parameter (ff, fx, rr, pt) werden gleichzeitig (parallel) abgerufen. Bei API-Timeouts dauert ein Zyklus maximal ~15 Sekunden statt bis zu 60 Sekunden (4 × 15s sequentiell).
+
+**API-Fehler über MQTT:**  `status/api_ok` (0/1) und `status/api_fehler` (Text) informieren Loxone bei API-Problemen. Damit können Push-Notifications für technische Fehler konfiguriert werden.
 
 ### TAWES 360° – So funktioniert es
 

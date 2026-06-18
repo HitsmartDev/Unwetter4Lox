@@ -35,7 +35,7 @@ code { background:#f0f0f0; padding:1px 4px; border-radius:3px; font-size:10px; f
     <li><b>TAWES 360°</b> – Live-Messdaten von Wetterstationen im Umkreis → Regen-ETA, Wind-Kaskade, Lokal-Regen, Gewitter-Vorhersage</li>
 </ul>
 <p>Alle Daten landen als MQTT-Nachrichten auf deinem LoxBerry-Broker und können direkt in Loxone-Logiken (Virtual Input) verwendet werden.</p>
-<p style="font-size:11px;color:#888">Aktuelle Version: <b>0.9.8</b> | <a href="https://github.com/HitsmartDev/Unwetter4Lox" target="_blank">GitHub</a></p>
+<p style="font-size:11px;color:#888">Aktuelle Version: <b>0.9.9</b> | <a href="https://github.com/HitsmartDev/Unwetter4Lox" target="_blank">GitHub</a></p>
 </div>
 
 <!-- DATENQUELLEN -->
@@ -287,14 +287,18 @@ code { background:#f0f0f0; padding:1px 4px; border-radius:3px; font-size:10px; f
 <table class="mqtt-table">
 <thead><tr><th>Topic</th><th>Werte</th><th>Bedeutung</th></tr></thead>
 <tbody>
-<tr><td><code>status</code></td><td>OK / Error - …</td><td>Systemstatus. "OK" = alles läuft. "Error - INCA API" = INCA nicht erreichbar.</td></tr>
-<tr><td><code>status/zamg_ok</code> <span class="tag-new">NEU</span></td><td>0 / 1</td><td>1 = letzter ZAMG-Abruf erfolgreich</td></tr>
-<tr><td><code>status/inca_ok</code> <span class="tag-new">NEU</span></td><td>0 / 1</td><td>1 = letzter INCA-Abruf erfolgreich</td></tr>
-<tr><td><code>status/tawes_ok</code> <span class="tag-new">NEU</span></td><td>0 / 1</td><td>1 = letzter TAWES-Abruf erfolgreich</td></tr>
+<tr><td><code>status</code></td><td>OK / Error - …</td><td>Systemstatus. "OK" = alles läuft. "Error - INCA API" = INCA nicht erreichbar. "Offline (LWT)" = Daemon abgestürzt (automatisch vom Broker gesetzt).</td></tr>
+<tr><td><code>status/api_ok</code> <span class="tag-new">NEU</span></td><td>0 / 1</td><td><b>Gate für API-Fehler-Push:</b> 0 = mindestens eine API (ZAMG/INCA/TAWES) meldet Fehler. Für Loxone-Monitoring empfohlen.</td></tr>
+<tr><td><code>status/api_fehler</code> <span class="tag-new">NEU</span></td><td>Text / leer</td><td>Beschreibung welche APIs gerade nicht erreichbar sind. Leer = alles OK. Beispiel: <code>INCA: API-Fehler | ZAMG: API-Fehler</code>. Für Push-Notification geeignet.</td></tr>
+<tr><td><code>status/zamg_ok</code></td><td>0 / 1</td><td>1 = letzter ZAMG-Abruf erfolgreich</td></tr>
+<tr><td><code>status/inca_ok</code></td><td>0 / 1</td><td>1 = letzter INCA-Abruf erfolgreich</td></tr>
+<tr><td><code>status/tawes_ok</code></td><td>0 / 1</td><td>1 = letzter TAWES-Abruf erfolgreich</td></tr>
+<tr><td><code>status/mqtt_reconnects</code></td><td>Zahl</td><td>Anzahl MQTT-Reconnects seit Daemon-Start. Wächst bei stabiler Verbindung nicht. Hohe Zahl = MQTT-Instabilität.</td></tr>
 <tr><td><code>letzter_abruf_datum</code></td><td>DD.MM.YYYY HH:MM:SS</td><td>Zeitpunkt der letzten erfolgreichen Datenaktualisierung</td></tr>
-<tr><td><code>letzter_abruf_epoch</code></td><td>Unix-Timestamp</td><td>Gleicher Zeitpunkt als Unix-Timestamp (für Loxone-Zeitvergleiche)</td></tr>
+<tr><td><code>letzter_abruf_epoch</code></td><td>Unix-Timestamp</td><td>Gleicher Zeitpunkt als Unix-Timestamp (für Loxone-Zeitvergleiche). Wenn dieser Wert seit &gt;10 Minuten nicht aktualisiert wird → Daemon prüfen.</td></tr>
 </tbody>
 </table>
+<p style="font-size:11px;color:#888"><b>Empfehlung System-Monitoring in Loxone:</b> Virtual Text Input auf <code>status/api_fehler</code> – bei Änderung von leer auf einen Text einen Push mit dem Fehlerinhalt senden. Analog: Virtual Input auf <code>status/api_ok</code> – Wert 0 = API-Problem → Alarm.</p>
 </div>
 </div>
 
@@ -442,6 +446,25 @@ code { background:#f0f0f0; padding:1px 4px; border-radius:3px; font-size:10px; f
 <h4>Was bedeutet "Upstream-Station"?</h4>
 <p>Eine Station gilt als Upstream, wenn die dominante Windrichtung (+/- 70°) von ihr zu deinem Standort zeigt. Das bedeutet: Das Wetter, das diese Station gerade misst, kommt in der Regel auch zu dir. Diese Stationen sind für die Vorhersage besonders relevant.</p>
 <p>Alpine Stationen (über der konfigurierten Max-Seehöhe, Standard: 1200 m) sind in der Anzeige markiert, aber fließen nicht in den Wind-Alarm-Konsens ein – Bergstationen messen natürlich stärkere Winde als das Tal.</p>
+</div>
+
+<div data-role="collapsible" data-collapsed="true">
+<h4>MQTT-Verbindung bricht regelmäßig ab – was tun?</h4>
+<p>Häufige Ursachen:</p>
+<ul>
+    <li><b>Zwei Daemon-Instanzen:</b> Wenn zwei Instanzen mit gleicher Client-ID (<code>unwetter4lox</code>) gleichzeitig laufen, kicken sie sich gegenseitig im 5-10 Sekunden Rhythmus. Ab v0.9.9: der Daemon beendet alte Instanzen beim Start automatisch. Im LoxBerry Daemon-Tab auf laufende Prozesse achten.</li>
+    <li><b>MQTT-Broker-Neustart:</b> LoxBerry startet Mosquitto manchmal neu (Update, Neustart). paho-mqtt reconnectet automatisch. Ab v0.9.9: Hard Reset nach 5 Minuten dauerhafter Trennung.</li>
+    <li><b>Netzwerkproblem:</b> Kurze Netzunterbrechungen → paho reconnectet innerhalb 5–60 Sekunden automatisch.</li>
+</ul>
+<p><b>Diagnose:</b> <code>status/mqtt_reconnects</code> überwachen – sollte bei stabiler Verbindung über Stunden nicht wachsen. Viele Reconnects bei gleichbleibendem Wert = Trennung und Wiederverbindung.</p>
+<p><b>Langzeit-Stabilität:</b> Täglicher Neustart um 03:00 Uhr bereinigt Speicher und Verbindungszustand. 5-Minuten-Watchdog startet den Daemon neu wenn er abgestürzt ist.</p>
+</div>
+
+<div data-role="collapsible" data-collapsed="true">
+<h4>INCA API meldet Timeout – was tun?</h4>
+<p>Die GeoSphere INCA API ist gelegentlich langsam oder kurzzeitig nicht erreichbar. Ab v0.9.9 werden alle 4 Parameter (ff, fx, rr, pt) <b>parallel</b> abgerufen – ein Timeout führt nicht mehr zu 60 Sekunden Blockade, sondern maximal zu 15 Sekunden.</p>
+<p>Bei Teildaten-Timeout (1-3 Parameter OK, 1-3 nicht) verwendet der Daemon die verfügbaren Werte. Bei vollständigem Ausfall bleiben die letzten bekannten INCA-Werte erhalten.</p>
+<p>MQTT-Topic <code>status/inca_ok</code> zeigt 0 wenn INCA fehlschlägt. <code>status/api_fehler</code> enthält den Fehlertext für Push-Notifications.</p>
 </div>
 
 <div data-role="collapsible" data-collapsed="true">
