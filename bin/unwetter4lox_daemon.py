@@ -1,4 +1,4 @@
-"""Unwetter4Lox Daemon v0.9.10 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
+"""Unwetter4Lox Daemon v0.9.11 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math, re, traceback, socket
 from datetime import datetime, timezone, timedelta
 from collections import deque
@@ -462,7 +462,8 @@ def correlate_tawes(initial_history=False):
     nearby = [st for st in nearby if 2 < st['dist_km'] <= TAWES_MAX_KM][:TAWES_MAX_STATIONS]
     if not nearby: return {}
     if initial_history:
-        hist = fetch_tawes_data([s['id'] for s in nearby], duration_min=60)
+        # 120 Minuten entspricht maxlen=12 × 10min – Buffer vollständig befüllen
+        hist = fetch_tawes_data([s['id'] for s in nearby], duration_min=120)
         for sid, points in hist.items():
             if sid not in TAWES_BUFFER: TAWES_BUFFER[sid] = deque(maxlen=12)
             for p in points: TAWES_BUFFER[sid].append(p)
@@ -926,7 +927,7 @@ def run():
         time.sleep(1)
     except Exception: pass
 
-    log.info(f'Unwetter4Lox v0.9.10 gestartet | Interval={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID}')
+    log.info(f'Unwetter4Lox v0.9.11 gestartet | Interval={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID}')
     try:
         with open(PID_FILE, 'w') as f: f.write(str(my_pid))
     except: pass
