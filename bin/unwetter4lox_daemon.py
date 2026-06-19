@@ -1,4 +1,4 @@
-"""Unwetter4Lox Daemon v0.9.9 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
+"""Unwetter4Lox Daemon v0.9.10 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math, re, traceback, socket
 from datetime import datetime, timezone, timedelta
 from collections import deque
@@ -450,6 +450,8 @@ def fetch_tawes_data(station_ids, duration_min=0):
                 except: return None
             points.append({'ts': _parse_iso(ts), 'RR': _v('RR'), 'FF': _v('FF'), 'FFX': _v('FFX'), 'DD': _v('DD'), 'P': _v('P'), 'RF': _v('RF')})
         if points: res[sid] = points
+    label = 'hist' if duration_min > 0 else 'aktuell'
+    log.debug(f'TAWES-API ({label}): {len(res)}/{len(ids)} Stationen mit Messwerten')
     return {s: p[-1] for s, p in res.items()} if duration_min == 0 else res
 
 def correlate_tawes(initial_history=False):
@@ -517,6 +519,11 @@ def correlate_tawes(initial_history=False):
             r_lok_st = f'{best["name"]} ({best["dist_km"]:.0f}km) {r_lok_mm}mm/h'
 
     ns = upstream[0] if upstream else (nearby[0] if nearby else None)
+    n_mit_daten = sum(1 for s in all_st if s.get('FF_kmh') is not None or s.get('FFX_kmh') is not None or s.get('RR') is not None)
+    log.info(f'TAWES OK | {n_mit_daten}/{len(nearby)} Stationen aktiv | wind_up={w_up_kmh}km/h | sturm_up={sturm_up} | regen_up={reg_up}')
+    if n_mit_daten < len(nearby) // 2:
+        offline = [s['name'] for s in all_st if s.get('FF_kmh') is None and s.get('FFX_kmh') is None and s.get('RR') is None]
+        log.debug(f'TAWES: {len(offline)} Stationen ohne aktuelle Messwerte: {", ".join(offline[:10])}{"..." if len(offline)>10 else ""}')
     return {
         'letztes_update': datetime.now().astimezone().strftime('%d.%m.%Y %H:%M:%S'),
         'dominante_windrichtung': round(dom_wr, 1), 'dominante_windrichtung_name': dom_wr_name,
@@ -919,7 +926,7 @@ def run():
         time.sleep(1)
     except Exception: pass
 
-    log.info(f'Unwetter4Lox v0.9.9 gestartet | Interval={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID}')
+    log.info(f'Unwetter4Lox v0.9.10 gestartet | Interval={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID}')
     try:
         with open(PID_FILE, 'w') as f: f.write(str(my_pid))
     except: pass
