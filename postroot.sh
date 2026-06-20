@@ -109,10 +109,31 @@ if [ -f "${PYDAEMON}" ]; then
     echo "<OK> Python-Daemon chmod +x: ${PYDAEMON}"
 fi
 
-# Daemon-Start erfolgt ausschließlich in postinstall.sh (als loxberry-User).
-# postroot.sh startet den Daemon NICHT – das verhindert zwei gleichzeitig laufende
-# Instanzen (postroot + postinstall würden sonst beide starten → RC=7-Loop).
-# Der Daemon wurde bereits in preupgrade.sh gestoppt.
+# Daemon nach Installation/Update starten.
+# postroot.sh ist der richtige Ort: Config wurde hier bereits aus /tmp-Backup
+# wiederhergestellt und sudoers ist gesetzt. postinstall.sh läuft VOR postroot.sh,
+# dort fehlt noch die Config-Restore → LAT/LON nicht lesbar → kein Start möglich.
+# preupgrade.sh hat den alten Daemon bereits gestoppt → kein Doppelstart.
+if [ -f "${DAEMONSCRIPT}" ] && [ -f "${CFGFILE}" ]; then
+    LAT=$(grep "^LAT=" "${CFGFILE}" 2>/dev/null | cut -d= -f2 | tr -d ' \r')
+    LON=$(grep "^LON=" "${CFGFILE}" 2>/dev/null | cut -d= -f2 | tr -d ' \r')
+    if [ -n "$LAT" ] && [ -n "$LON" ]; then
+        echo "<INFO> Standort konfiguriert (${LAT},${LON}) – starte Daemon..."
+        if command -v runuser >/dev/null 2>&1; then
+            runuser -s /bin/bash -c "\"${DAEMONSCRIPT}\" restart >/dev/null 2>&1" loxberry \
+                && echo "<OK> Daemon als loxberry-User gestartet" \
+                || echo "<WARNING> Daemon-Start fehlgeschlagen – bitte manuell starten"
+        elif su -s /bin/bash loxberry -c "\"${DAEMONSCRIPT}\" restart >/dev/null 2>&1" 2>/dev/null; then
+            echo "<OK> Daemon als loxberry-User gestartet (su)"
+        else
+            "${DAEMONSCRIPT}" restart >/dev/null 2>&1 \
+                && echo "<OK> Daemon gestartet" \
+                || echo "<WARNING> Daemon-Start fehlgeschlagen"
+        fi
+    else
+        echo "<INFO> Kein Standort konfiguriert – Daemon wird nach Konfiguration gestartet"
+    fi
+fi
 
 # /etc/cron.d/ Eintrag: zuverlässiger als user-crontab, überlebt Updates
 # @reboot:  startet Daemon 120s nach Systemstart (MQTT-Broker braucht Zeit)

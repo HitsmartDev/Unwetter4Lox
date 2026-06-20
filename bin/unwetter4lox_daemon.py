@@ -1,4 +1,4 @@
-"""Unwetter4Lox Daemon v0.9.12 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
+"""Unwetter4Lox Daemon v0.9.13 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math, re, traceback, socket
 from datetime import datetime, timezone, timedelta
 from collections import deque
@@ -927,7 +927,7 @@ def run():
         time.sleep(1)
     except Exception: pass
 
-    log.info(f'Unwetter4Lox v0.9.12 gestartet | Interval={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID}')
+    log.info(f'Unwetter4Lox v0.9.13 gestartet | Interval={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID}')
     try:
         with open(PID_FILE, 'w') as f: f.write(str(my_pid))
     except: pass

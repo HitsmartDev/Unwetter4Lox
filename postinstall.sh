@@ -1,6 +1,7 @@
 #!/bin/bash
 # Unwetter4Lox postinstall.sh – läuft als loxberry User nach der Installation
-# REPLACELBHOMEDIR und REPLACELBPPLUGINDIR werden vom LoxBerry-Installer ersetzt
+# WICHTIG: postinstall.sh läuft VOR postroot.sh! Config-Restore und sudoers-Setup
+# erfolgen erst in postroot.sh. Deshalb KEIN Daemon-Start hier – postroot.sh übernimmt das.
 
 LBHOMEDIR="REPLACELBHOMEDIR"
 PLUGINDIR="REPLACELBPPLUGINDIR"
@@ -27,7 +28,7 @@ else
     fi
 fi
 
-# Standard-Config anlegen wenn noch nicht vorhanden
+# Standard-Config anlegen wenn noch nicht vorhanden (nur bei Erstinstallation)
 if [ ! -f "$CFGFILE" ]; then
     if [ -f "$CFGDEF" ]; then
         cp "$CFGDEF" "$CFGFILE"
@@ -46,34 +47,19 @@ if [ -f "${DAEMON_PY}" ]; then
     echo "<OK> Daemon ausführbar: ${DAEMON_PY}"
 fi
 
-# TAWES Stations-Cache bei jeder Installation/Update löschen
-# Verhindert ID-Mismatch wenn GeoSphere API das ID-Format ändert.
-# Der Daemon lädt den Cache automatisch beim ersten Lauf neu.
+# TAWES Stations-Cache löschen – wird beim nächsten Daemon-Start frisch geladen
 TAWES_CACHE="${LBHOMEDIR}/data/plugins/${PLUGINDIR}/tawes_stations.json"
 if [ -f "$TAWES_CACHE" ]; then
     rm -f "$TAWES_CACHE"
-    echo "<OK> TAWES Stations-Cache gelöscht – wird beim ersten Daemon-Start neu geladen"
+    echo "<OK> TAWES Stations-Cache gelöscht"
 else
     echo "<INFO> Kein TAWES Cache vorhanden (Erstinstallation)"
 fi
 
-# Daemon nach Update/Neuinstallation automatisch starten wenn bereits konfiguriert (LAT/LON vorhanden)
-DAEMON="${LBHOMEDIR}/system/daemons/plugins/${PLUGINDIR}"
-LAT=$(grep "^LAT=" "${CFGFILE}" 2>/dev/null | cut -d= -f2 | tr -d ' \r')
-LON=$(grep "^LON=" "${CFGFILE}" 2>/dev/null | cut -d= -f2 | tr -d ' \r')
-if [ -n "$LAT" ] && [ -n "$LON" ] && [ -f "${DAEMON}" ]; then
-    echo "<INFO> Standort konfiguriert (LAT=${LAT}) – starte Daemon nach Installation/Update..."
-    # restart statt start: _stop_all() killt zuverlässig alle laufenden Instanzen
-    # (inkl. stale PID-Files und Prozesse die preupgrade.sh nicht erwischt hat)
-    sudo "${DAEMON}" restart 2>/dev/null \
-        && echo "<OK> Daemon erfolgreich gestartet" \
-        || echo "<WARNING> Daemon-Start fehlgeschlagen – bitte in der Plugin-UI manuell starten"
-else
-    echo "<INFO> Kein Standort konfiguriert – Daemon wird nach der Konfiguration gestartet"
-fi
+# Daemon-Start erfolgt in postroot.sh – dort ist Config bereits wiederhergestellt
+# und sudoers ist eingerichtet. postinstall.sh läuft VOR postroot.sh, daher
+# wäre sudo hier nicht verfügbar und LAT/LON wären in der default-Config nicht gesetzt.
+echo "<INFO> Daemon-Start erfolgt in postroot.sh nach Config-Restore."
 
-# Autostart + täglicher Restart werden via /etc/cron.d/ in postroot.sh (root) angelegt.
-# Zuverlässiger als user-crontab, da root-owned und Update-sicher.
-
-echo "<OK> Unwetter4Lox Installation abgeschlossen."
+echo "<OK> Unwetter4Lox postinstall abgeschlossen."
 exit 0
