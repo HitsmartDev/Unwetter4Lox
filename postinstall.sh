@@ -63,11 +63,9 @@ LAT=$(grep "^LAT=" "${CFGFILE}" 2>/dev/null | cut -d= -f2 | tr -d ' \r')
 LON=$(grep "^LON=" "${CFGFILE}" 2>/dev/null | cut -d= -f2 | tr -d ' \r')
 if [ -n "$LAT" ] && [ -n "$LON" ] && [ -f "${DAEMON}" ]; then
     echo "<INFO> Standort konfiguriert (LAT=${LAT}) – starte Daemon nach Installation/Update..."
-    # Sicherheitshalber nochmals alle laufenden Instanzen killen (Fallback für Race Conditions).
-    # Der Daemon wurde bereits in preupgrade.sh gestoppt; dies ist ein zusätzlicher Schutz.
-    pkill -f "unwetter4lox_daemon.py" 2>/dev/null || true
-    sleep 2
-    sudo "${DAEMON}" start 2>/dev/null \
+    # restart statt start: _stop_all() killt zuverlässig alle laufenden Instanzen
+    # (inkl. stale PID-Files und Prozesse die preupgrade.sh nicht erwischt hat)
+    sudo "${DAEMON}" restart 2>/dev/null \
         && echo "<OK> Daemon erfolgreich gestartet" \
         || echo "<WARNING> Daemon-Start fehlgeschlagen – bitte in der Plugin-UI manuell starten"
 else
