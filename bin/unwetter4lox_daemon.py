@@ -1,4 +1,4 @@
-"""Unwetter4Lox Daemon v0.9.15 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
+"""Unwetter4Lox Daemon v0.9.16 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math, re, traceback, socket
 from datetime import datetime, timezone, timedelta
 from collections import deque
@@ -816,7 +816,7 @@ def build_alarm(zamg, inca, tawes, prev_alarm, trend=None):
 
     rr      = i.get('rr_jetzt', 0) or 0
     eta     = i.get('minuten_bis_regen', -1)
-    ir_raw  = _mm_al(rr) or (1 if eta >= 0 else 0)  # ETA-Signal auch ohne akuten Regen
+    ir_raw  = _mm_al(rr) or (1 if eta > 0 else 0)   # ETA > 0 = Regen kommt; ETA=0 = Regen da → nur rr_jetzt entscheidet
     tawes_regen  = bool(t.get('regen_upstream', 0) or t.get('regen_lokal', 0))
     up_mm   = t.get('regen_upstream_mm', 0) or 0
     lok_mm  = t.get('regen_lokal_mm', 0) or 0
@@ -894,18 +894,28 @@ def build_alarm(zamg, inca, tawes, prev_alarm, trend=None):
     # ETA: priorisiere korrigierte Trendextrapolation über INCA-Rohwert
     eta_best = eta_korr if eta_korr >= 0 else (eta if eta >= 0 else -1)
 
-    # Zusammenfassung mit Quelle und ETA (für MQTT alarm/zusammenfassung und Loxone)
+    # Zusammenfassung als lesbarer Klartext (für notification/alle und alarm/zusammenfassung)
+    W_TXT = ['', 'Windwarnung', 'Sturmwarnung', 'Extremsturm']
+    R_TXT = ['', 'Regen möglich', 'Regen bestätigt', 'Starkregen']
+    kfz_txt = ('sehr hoch' if konfidenz >= 80 else
+               ('hoch'     if konfidenz >= 60 else
+               ('mittel'   if konfidenz >= 40 else 'gering')))
     parts = []
-    if a_w > 0: parts.append(f'Wind:{a_w} [{wq}]')
+    if a_w > 0:
+        parts.append(f'💨 {W_TXT[min(a_w,3)]} (Stufe {a_w}/3)')
     if a_r > 0:
-        rp = f'Regen:{a_r} [{rq}]'
-        if eta_best >= 0: rp += f' ETA ~{eta_best}min'
-        if regen_trend == 'zunehmend': rp += ' ↑'
+        rp = f'🌧️ {R_TXT[min(a_r,3)]} (Stufe {a_r}/3)'
+        if eta_best > 0:   rp += f' – Ankunft in ~{eta_best} min'
+        elif eta_best == 0: rp += ' – Regen jetzt vor Ort'
+        if regen_trend == 'zunehmend': rp += ', nimmt zu'
+        elif regen_trend == 'abnehmend': rp += ', lässt nach'
         parts.append(rp)
-    if a_g > 0: parts.append(f'Gewitter:{a_g}')
-    if a_h > 0: parts.append(f'Hagel:{a_h}')
-    if a_s > 0: parts.append(f'Schnee:{a_s}')
-    zusf = ', '.join(parts) if parts else ('Entwarnung' if entw else 'Ruhig')
+    if a_g > 0: parts.append(f'⚡ Gewitterwarnung (Stufe {a_g}/3)')
+    if a_h > 0: parts.append(f'🌨 Hagelgefahr (Stufe {a_h}/3)')
+    if a_s > 0: parts.append(f'❄️ Schnee/Eis (Stufe {a_s}/3)')
+    if parts and konfidenz >= 40:
+        parts.append(f'Sicherheit: {kfz_txt}')
+    zusf = ' | '.join(parts) if parts else ('Entwarnung – kein Unwetter mehr' if entw else '')
 
     return {'gesamt':a_ges,'wind':a_w,'regen':a_r,'gewitter':a_g,'hagel':a_h,'schnee':a_s,
             'stufe':z.get('max_stufe',0),'wind_quelle':wq,'regen_quelle':rq,
@@ -913,7 +923,7 @@ def build_alarm(zamg, inca, tawes, prev_alarm, trend=None):
             'entwarnung':entw,'zusammenfassung':zusf}
 
 def _notification_inca(i, alarm=None):
-    """INCA Nowcast-Nachricht – immer gesendet, liefert 15-60-min Vorschau für Loxone."""
+    """Nowcast-Nachricht in Klartext – 60-Minuten-Vorschau, für Loxone gut lesbar."""
     if not i: return ''
     fx60 = i.get('fx_max_60min', 0) or 0
     rr   = i.get('rr_jetzt', 0) or 0
@@ -922,68 +932,73 @@ def _notification_inca(i, alarm=None):
     rq   = al.get('regen_quelle', '')
     kfz  = al.get('konfidenz', 0)
     rtr  = al.get('regen_trend', '')
-    eta_b= al.get('eta_min', eta)   # Trend-korrigierter ETA hat Vorrang
+    eta_b= al.get('eta_min', eta)
+    kfz_txt = ('sehr hoch' if kfz >= 80 else ('hoch' if kfz >= 60 else ('mittel' if kfz >= 40 else 'gering')))
     parts = []
-    # Wind
+    # Wind/Sturm
     if i.get('bald_sturm_30'):
-        parts.append(f'🟠 Sturmböen in <30min: max {round(fx60)}km/h')
+        parts.append(f'💨 Sturmböen in weniger als 30 Minuten – bis {round(fx60)} km/h')
     elif i.get('bald_sturm_60'):
-        parts.append(f'⚠️ Sturmböen in <60min: max {round(fx60)}km/h')
+        parts.append(f'💨 Sturmböen in weniger als 60 Minuten – bis {round(fx60)} km/h')
     # Hagel / Graupel
-    if i.get('bald_hagel'):   parts.append('🔴 Hagel in <60min erwartet')
-    elif i.get('bald_graupel'): parts.append('⚠️ Graupel möglich')
+    if i.get('bald_hagel'):     parts.append('🌨 Hagelgefahr in den nächsten 60 Minuten')
+    elif i.get('bald_graupel'): parts.append('Graupel möglich in den nächsten 60 Minuten')
     # Regen
     if rr >= REGEN_ALARM:
-        bestaetigt = ' ✓ TAWES' if 'TAWES' in rq else (' ✓ ZAMG' if 'ZAMG' in rq else '')
-        trend_pf   = ' ↑ zunehmend' if rtr == 'zunehmend' else (' ↓ nachlassend' if rtr == 'abnehmend' else '')
-        parts.append(f'🌧️ Regen jetzt: {rr}mm/h{bestaetigt}{trend_pf}')
-    elif eta_b >= 0:
-        bestaetigt = ' ✓ TAWES' if 'TAWES' in rq else ''
-        zuvl = f' | {kfz}% Konfidenz' if kfz >= 50 else ' | Prognose'
-        parts.append(f'🌧️ Regen in ~{eta_b}min{bestaetigt}{zuvl}')
-    # Fallback: kein Alarm, aber Böen messbar
-    if not parts and fx60 > 0:
-        parts.append(f'✅ Kein Alarm | Böen bis {round(fx60)}km/h | Niederschlag: {i.get("pt_name","–")}')
+        best  = ' – durch Wetterstationen bestätigt' if 'TAWES' in rq else (' – laut offizieller Warnung' if 'ZAMG' in rq else '')
+        trend = ', Intensität nimmt zu' if rtr == 'zunehmend' else (', lässt nach' if rtr == 'abnehmend' else '')
+        parts.append(f'🌧️ Regen vor Ort: {rr} mm/h{best}{trend}')
+    elif eta_b > 0:
+        best = ' – durch Wetterstationen bestätigt' if 'TAWES' in rq else ''
+        sicherheit = f' (Sicherheit: {kfz_txt})' if kfz >= 40 else ''
+        parts.append(f'🌧️ Regen erwartet in ~{eta_b} Minuten{best}{sicherheit}')
+    # Fallback
     if not parts:
-        parts.append(f'✅ Ruhig | Wind: {round(i.get("ff_jetzt",0))}km/h | Kein Niederschlag')
+        if fx60 > 20:
+            parts.append(f'Böen bis {round(fx60)} km/h – kein Regenalarm')
+        else:
+            pt = i.get('pt_name', '')
+            parts.append(f'Kein Alarm – {pt if pt else "kein Niederschlag erwartet"}')
     return ' | '.join(parts)
 
 def _notification_tawes(t, alarm=None):
-    """TAWES Messnetz-Nachricht – zeigt was die Umgebungsstationen JETZT messen."""
+    """Messnetz-Nachricht in Klartext – zeigt was Umgebungsstationen gerade messen."""
     if not t: return ''
     al   = alarm or {}
     eta_b= al.get('eta_min', -1)
     rtr  = al.get('regen_trend', '')
     wr   = t.get('dominante_windrichtung_name', '–')
     n_up = t.get('upstream_aktiv', 0) or 0
+    n_ges= len(t.get('alle_stationen', []))
     parts = []
     # Wind
-    w_up  = t.get('wind_upstream_kmh', 0) or 0
+    w_up = t.get('wind_upstream_kmh', 0) or 0
     if t.get('sturm_upstream'):
-        parts.append(f'💨 Sturmböen upstream: {w_up}km/h aus {wr} ({n_up} Stationen)')
+        parts.append(f'💨 Sturmböen aus {wr} in der Umgebung – {w_up} km/h ({n_up} Stationen)')
     elif t.get('wind_kaskade'):
         keta = t.get('wind_kaskade_eta_min', -1)
         s = f'💨 Sturmfront aus {wr} nähert sich'
-        if keta > 0: s += f' | ETA ~{keta}min'
+        if keta > 0: s += f' – Ankunft in ~{keta} Minuten'
         parts.append(s)
-    elif w_up > 0 and n_up > 0:
-        parts.append(f'💨 Wind upstream: {w_up}km/h aus {wr} ({n_up} Stationen)')
-    # Regen upstream
+    elif w_up > 20 and n_up > 0:
+        parts.append(f'Wind aus {wr}: {w_up} km/h ({n_up} Stationen)')
+    # Regen
     up_mm = t.get('regen_upstream_mm', 0) or 0
     if up_mm > 0:
-        s = f'🌧️ Regen upstream: {up_mm}mm/h aus {wr}'
-        if eta_b >= 0: s += f' | ETA ~{eta_b}min'
-        if rtr == 'zunehmend': s += ' ↑'
+        s = f'🌧️ Regen aus {wr} nähert sich – {up_mm} mm/h gemessen'
+        if eta_b > 0: s += f', Ankunft in ~{eta_b} Minuten'
+        if rtr == 'zunehmend': s += ', Intensität nimmt zu'
         parts.append(s)
     elif t.get('regen_lokal'):
         lok    = t.get('regen_lokal_station', '') or ''
         lok_mm = t.get('regen_lokal_mm', 0) or 0
-        parts.append(f'🌧️ Lokal-Regen: {lok} – {lok_mm}mm/h' if lok else '🌧️ Regen in der Nähe')
-    # Fallback: Stationen aktiv, kein Signal
+        s = f'🌧️ Regen in der Nähe: {lok_mm} mm/h'
+        if lok: s += f' (bei {lok})'
+        parts.append(s)
+    # Fallback
     if not parts:
-        n_ges = len(t.get('alle_stationen', []))
         if n_ges > 0:
-            parts.append(f'✅ {n_ges} Stationen aktiv | Wind: {w_up}km/h aus {wr} | kein Alarm-Signal')
+            parts.append(f'{n_ges} Wetterstationen aktiv – kein Unwetter-Signal')
     return ' | '.join(parts)
 
 # ---------------------------------------------------------------------------
@@ -1088,17 +1103,13 @@ def publish_all(status_msg, tawes=None, zamg=None, inca=None, alarm=None, prev=N
     publish('notification/tageswarnung', notif_tages)
 
     if a_ges >= 1:
-        # notification/alle: reichhaltige Zusammenfassung aller aktiven Quellen
-        alle = []
+        # notification/alle: lesbare Zusammenfassung (aus build_alarm.zusammenfassung)
+        notif_alle = (alarm or {}).get('zusammenfassung', '')
+        # ZAMG-Offizialtext anhängen wenn aktive amtliche Warnung vorliegt
         if zamg and zamg.get('irgendwas_aktiv'):
-            alle.append(zamg.get('notification_geosphere',''))
-        if inca and ('INCA' in (alarm or {}).get('wind_quelle','') or 'INCA' in (alarm or {}).get('regen_quelle','')):
-            alle.append(nt_inca)
-        if tawes and (tawes.get('sturm_upstream') or tawes.get('wind_kaskade') or
-                      (tawes.get('regen_upstream_mm',0) or 0) > 0 or tawes.get('regen_lokal')):
-            alle.append(nt_tawes)
-        notif_alle = ' ── '.join(p for p in alle if p)
-        if not notif_alle: notif_alle = (alarm or {}).get('zusammenfassung', '')
+            zamg_txt = zamg.get('notification_geosphere', '')
+            if zamg_txt and zamg_txt not in notif_alle:
+                notif_alle = (notif_alle + ' | ' + zamg_txt) if notif_alle else zamg_txt
         publish('notification/alle', notif_alle)
     elif entw:
         notif_alle = L['entwarnung']
@@ -1166,7 +1177,7 @@ def run():
         time.sleep(1)
     except Exception: pass
 
-    log.info(f'Unwetter4Lox v0.9.15 gestartet | Interval={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID} | Upstream=±{TAWES_UPSTREAM_WINKEL}° | Trend-Engine aktiv')
+    log.info(f'Unwetter4Lox v0.9.16 gestartet | Interval={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID} | Upstream=±{TAWES_UPSTREAM_WINKEL}° | Trend-Engine aktiv')
     try:
         with open(PID_FILE, 'w') as f: f.write(str(my_pid))
     except: pass
