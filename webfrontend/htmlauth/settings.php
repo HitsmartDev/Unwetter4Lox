@@ -60,11 +60,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     $c .= "[TAWES]\n";
     $c .= "ENABLED={$tawes_en}\n";
-    $c .= "MAX_DISTANCE_KM="   . max(20,  min(150, intval($_POST['tawes_max_km']          ?? 120))) . "\n";
-    $c .= "MAX_STATIONS="      . max(5,   min(50,  intval($_POST['tawes_max_stations']     ?? 25)))  . "\n";
-    $c .= "MIN_ALARM_PROZENT=" . max(10,  min(100, intval($_POST['tawes_min_alarm_prozent'] ?? 30))) . "\n";
-    $c .= "MAX_UPSTREAM_HOEHE_M=" . max(0, min(3000, intval($_POST['tawes_max_upstream_hoehe'] ?? 1200))) . "\n";
-    $c .= "REGEN_LOKAL_KM="    . max(5,   min(100, intval($_POST['tawes_regen_lokal_km']   ?? 25)))  . "\n";
+    $c .= "MAX_DISTANCE_KM="      . max(20,  min(150, intval($_POST['tawes_max_km']             ?? 120))) . "\n";
+    $c .= "MAX_STATIONS="         . max(5,   min(50,  intval($_POST['tawes_max_stations']        ?? 25)))  . "\n";
+    $c .= "MIN_ALARM_PROZENT="    . max(10,  min(100, intval($_POST['tawes_min_alarm_prozent']   ?? 30))) . "\n";
+    $c .= "MAX_UPSTREAM_HOEHE_M=" . max(0,   min(3000,intval($_POST['tawes_max_upstream_hoehe'] ?? 1200))). "\n";
+    $c .= "REGEN_LOKAL_KM="       . max(5,   min(100, intval($_POST['tawes_regen_lokal_km']     ?? 25)))  . "\n";
+    $c .= "UPSTREAM_WINKEL_GRAD=" . max(20,  min(90,  intval($_POST['tawes_upstream_winkel']    ?? 45)))  . "\n";
 
     if (file_put_contents($cfgfile, $c) !== false) {
         $saved  = true;
@@ -199,40 +200,66 @@ if (file_exists($tawes_cache)) {
     $st_count = is_array($sts) ? count($sts) : 0;
 }
 ?>
-<div class="ui-field-contain">
-    <label for="tawes_max_km"><?= $L['MAIN.TAWES_MAX_KM'] ?>: <span id="tkm"><?= htmlspecialchars($cfg['TAWES']['MAX_DISTANCE_KM'] ?? '120') ?></span> km</label>
-    <input type="range" id="tawes_max_km" name="tawes_max_km" min="20" max="150" step="10"
-           value="<?= htmlspecialchars($cfg['TAWES']['MAX_DISTANCE_KM'] ?? '120') ?>"
-           oninput="document.getElementById('tkm').textContent=this.value">
+<?php
+// Hilfsfunktion: aktuellen Wert aus Config, mit Fallback
+function tvCfg($k, $d) { global $cfg; return htmlspecialchars($cfg['TAWES'][$k] ?? $d); }
+?>
+<style>
+.slider-row { margin: 8px 0 2px 0; }
+.slider-val { display:inline-block; background:#1a6ca8; color:#fff; font-weight:bold;
+              border-radius:3px; padding:1px 7px; font-size:13px; min-width:38px; text-align:center; }
+</style>
+
+<div class="slider-row">
+<label for="tawes_max_km"><?= $L['MAIN.TAWES_MAX_KM'] ?> <span class="slider-val" id="tkm"><?= tvCfg('MAX_DISTANCE_KM','120') ?></span> km</label>
+<input type="range" id="tawes_max_km" name="tawes_max_km" min="20" max="150" step="10"
+       value="<?= tvCfg('MAX_DISTANCE_KM','120') ?>"
+       oninput="document.getElementById('tkm').textContent=this.value">
 </div>
-<div class="ui-field-contain">
-    <label for="tawes_max_stations">Max. Stationen (API): <span id="tms"><?= htmlspecialchars($cfg['TAWES']['MAX_STATIONS'] ?? '25') ?></span></label>
-    <input type="range" id="tawes_max_stations" name="tawes_max_stations" min="5" max="50" step="5"
-           value="<?= htmlspecialchars($cfg['TAWES']['MAX_STATIONS'] ?? '25') ?>"
-           oninput="document.getElementById('tms').textContent=this.value">
+
+<div class="slider-row">
+<label for="tawes_max_stations">Max. Stationen (API) <span class="slider-val" id="tms"><?= tvCfg('MAX_STATIONS','25') ?></span></label>
+<input type="range" id="tawes_max_stations" name="tawes_max_stations" min="5" max="50" step="5"
+       value="<?= tvCfg('MAX_STATIONS','25') ?>"
+       oninput="document.getElementById('tms').textContent=this.value">
+<p style="font-size:11px;color:#888;margin:2px 0">Anzahl der nächstgelegenen Stationen die pro Zyklus von der API abgefragt werden. Mehr = genauerer Konsens, aber mehr Netzlast.</p>
 </div>
-<p style="font-size:11px;color:#888;margin:2px 0">Anzahl der nächstgelegenen Stationen die pro Zyklus von der API abgefragt werden. Mehr Stationen = genauerer Konsens, aber mehr Netzlast.</p>
-<div class="ui-field-contain">
-    <label for="tawes_min_alarm_prozent">Konsens-Schwelle (Alarm): <span id="tmap"><?= htmlspecialchars($cfg['TAWES']['MIN_ALARM_PROZENT'] ?? '30') ?></span>%</label>
-    <input type="range" id="tawes_min_alarm_prozent" name="tawes_min_alarm_prozent" min="10" max="100" step="10"
-           value="<?= htmlspecialchars($cfg['TAWES']['MIN_ALARM_PROZENT'] ?? '30') ?>"
-           oninput="document.getElementById('tmap').textContent=this.value">
+
+<div class="slider-row">
+<label for="tawes_upstream_winkel">Upstream-Kegel (Halbwinkel) <span class="slider-val" id="tuw"><?= tvCfg('UPSTREAM_WINKEL_GRAD','45') ?></span>° → Gesamtkegel: <span id="tuw2"><?= intval(tvCfg('UPSTREAM_WINKEL_GRAD','45')) * 2 ?></span>°</label>
+<input type="range" id="tawes_upstream_winkel" name="tawes_upstream_winkel" min="20" max="90" step="5"
+       value="<?= tvCfg('UPSTREAM_WINKEL_GRAD','45') ?>"
+       oninput="document.getElementById('tuw').textContent=this.value; document.getElementById('tuw2').textContent=this.value*2">
+<p style="font-size:11px;color:#888;margin:2px 0">
+Wie weit links/rechts von der Windrichtung eine Station als „Upstream" gilt. <b>45° (Standard)</b> = 90° Gesamtkegel = nur Stationen nahe der Windrichtung.
+70° (alt) = 140° Gesamtkegel = zu breit, SW und NW können beide upstream sein.
+<br>Kleiner Winkel = präziser aber weniger Stationen. Empfehlung: <b>30°–50°</b>.
+</p>
 </div>
-<p style="font-size:11px;color:#888;margin:2px 0">Mindestanteil der Upstream-Stationen MIT Daten die den Schwellwert überschreiten müssen (Wind ≥ Böenalarm / Regen erkannt). Verhindert False-Positives durch einzelne Ausreißer-Stationen.</p>
-<div class="ui-field-contain">
-    <label for="tawes_max_upstream_hoehe">Max. Seehöhe Upstream (Wind-Alarm): <span id="tmueh"><?= htmlspecialchars($cfg['TAWES']['MAX_UPSTREAM_HOEHE_M'] ?? '1200') ?></span> m</label>
-    <input type="range" id="tawes_max_upstream_hoehe" name="tawes_max_upstream_hoehe" min="0" max="3000" step="100"
-           value="<?= htmlspecialchars($cfg['TAWES']['MAX_UPSTREAM_HOEHE_M'] ?? '1200') ?>"
-           oninput="document.getElementById('tmueh').textContent=this.value">
+
+<div class="slider-row">
+<label for="tawes_min_alarm_prozent">Konsens-Schwelle (Alarm) <span class="slider-val" id="tmap"><?= tvCfg('MIN_ALARM_PROZENT','30') ?></span>%</label>
+<input type="range" id="tawes_min_alarm_prozent" name="tawes_min_alarm_prozent" min="10" max="100" step="10"
+       value="<?= tvCfg('MIN_ALARM_PROZENT','30') ?>"
+       oninput="document.getElementById('tmap').textContent=this.value">
+<p style="font-size:11px;color:#888;margin:2px 0">Mindestanteil der Upstream-Stationen die den Schwellwert überschreiten müssen. Verhindert False-Positives durch einzelne Ausreißer.</p>
 </div>
-<p style="font-size:11px;color:#888;margin:2px 0">Upstream-Stationen über dieser Seehöhe (Meter) werden aus dem Wind-Alarm-Konsens ausgeschlossen (z.B. Feuerkogel 1618m, Schafberg 1783m). Verhindert False-Alarms durch natürlich höhere Bergwind-Werte. 0 = alle Stationen einbeziehen.</p>
-<div class="ui-field-contain">
-    <label for="tawes_regen_lokal_km">Lokal-Regen Umkreis: <span id="trlkm"><?= htmlspecialchars($cfg['TAWES']['REGEN_LOKAL_KM'] ?? '25') ?></span> km</label>
-    <input type="range" id="tawes_regen_lokal_km" name="tawes_regen_lokal_km" min="5" max="50" step="5"
-           value="<?= htmlspecialchars($cfg['TAWES']['REGEN_LOKAL_KM'] ?? '25') ?>"
-           oninput="document.getElementById('trlkm').textContent=this.value">
+
+<div class="slider-row">
+<label for="tawes_max_upstream_hoehe">Max. Seehöhe Upstream (Wind-Alarm) <span class="slider-val" id="tmueh"><?= tvCfg('MAX_UPSTREAM_HOEHE_M','1200') ?></span> m</label>
+<input type="range" id="tawes_max_upstream_hoehe" name="tawes_max_upstream_hoehe" min="0" max="3000" step="100"
+       value="<?= tvCfg('MAX_UPSTREAM_HOEHE_M','1200') ?>"
+       oninput="document.getElementById('tmueh').textContent=this.value">
+<p style="font-size:11px;color:#888;margin:2px 0">Upstream-Stationen über dieser Seehöhe werden aus dem Wind-Alarm-Konsens ausgeschlossen (z.B. Feuerkogel 1618m, Schafberg 1783m). 0 = alle einbeziehen.</p>
 </div>
-<p style="font-size:11px;color:#888;margin:2px 0">Umkreis in km für die Erkennung von lokalem Regen (Stationen unabhängig von der Windrichtung). Stationen innerhalb dieses Radius, die aktuell Regen melden, aktivieren <code>tawes/regen_lokal</code> und können <code>alarm/regen</code> auslösen. Stationen außerhalb des Radius sind in der Stations-Anzeige sichtbar, fließen aber nicht in den Alarm ein. Standard: 25 km.</p>
+
+<div class="slider-row">
+<label for="tawes_regen_lokal_km">Lokal-Regen Umkreis <span class="slider-val" id="trlkm"><?= tvCfg('REGEN_LOKAL_KM','25') ?></span> km</label>
+<input type="range" id="tawes_regen_lokal_km" name="tawes_regen_lokal_km" min="5" max="50" step="5"
+       value="<?= tvCfg('REGEN_LOKAL_KM','25') ?>"
+       oninput="document.getElementById('trlkm').textContent=this.value">
+<p style="font-size:11px;color:#888;margin:2px 0">Umkreis für lokalen Regen-Alarm (unabhängig von Windrichtung). Standard: 25 km.</p>
+</div>
 <p style="font-size:11px;color:#888">
     Stations-Cache: <b><?= $st_count ?></b> Stationen geladen.
     <?= $st_count ? '(tawes_stations.json vorhanden)' : '(wird beim ersten Daemon-Start geladen)' ?>
@@ -309,29 +336,36 @@ $(function(){
 <!-- INTERVALL & SCHWELLEN -->
 <div data-role="collapsible" data-collapsed="true" data-theme="a" data-content-theme="a">
 <h3>⚙️ <?= $L['MAIN.INTERVAL'] ?> & Alarmschwellen</h3>
-<div class="ui-field-contain">
-    <label for="interval"><?= $L['MAIN.INTERVAL'] ?> <small style="color:#888">(<?= $L['MAIN.LABEL_DEFAULT'] ?>: 300 s)</small></label>
-    <input type="range" id="interval" name="interval" min="60" max="900" step="30"
-           value="<?= v('SCHEDULE','INTERVAL','300') ?>">
-    <p style="font-size:10px;color:#888;margin:2px 0">Wie oft der Daemon die Wetter-APIs abfragt (Sekunden). TAWES-Stationen werden immer nur alle 10 Minuten abgerufen.</p>
+<div class="slider-row">
+<label for="interval"><?= $L['MAIN.INTERVAL'] ?> <span class="slider-val" id="siv"><?= v('SCHEDULE','INTERVAL','300') ?></span> s</label>
+<input type="range" id="interval" name="interval" min="60" max="900" step="30"
+       value="<?= v('SCHEDULE','INTERVAL','300') ?>"
+       oninput="document.getElementById('siv').textContent=this.value">
+<p style="font-size:10px;color:#888;margin:2px 0">Wie oft der Daemon die Wetter-APIs abfragt (Sekunden). TAWES wird immer nur alle 10 Minuten abgerufen.</p>
 </div>
-<div class="ui-field-contain">
-    <label for="inca_horizon"><?= $L['MAIN.HORIZON'] ?> <small style="color:#888">(<?= $L['MAIN.LABEL_DEFAULT'] ?>: 60 min)</small></label>
-    <input type="range" id="inca_horizon" name="inca_horizon" min="15" max="60" step="15"
-           value="<?= v('INCA','HORIZON_MINUTES','60') ?>">
-    <p style="font-size:10px;color:#888;margin:2px 0">Wie weit der INCA Nowcast vorausschaut. Maximalwert 60 Minuten empfohlen.</p>
+
+<div class="slider-row">
+<label for="inca_horizon"><?= $L['MAIN.HORIZON'] ?> <span class="slider-val" id="sih"><?= v('INCA','HORIZON_MINUTES','60') ?></span> min</label>
+<input type="range" id="inca_horizon" name="inca_horizon" min="15" max="60" step="15"
+       value="<?= v('INCA','HORIZON_MINUTES','60') ?>"
+       oninput="document.getElementById('sih').textContent=this.value">
+<p style="font-size:10px;color:#888;margin:2px 0">Wie weit der INCA Nowcast vorausschaut (15–60 min). 60 min empfohlen.</p>
 </div>
-<div class="ui-field-contain">
-    <label for="boen_alarm"><?= $L['MAIN.BOEN_ALARM'] ?> <small style="color:#888">(<?= $L['MAIN.LABEL_DEFAULT'] ?>: 60 km/h)</small></label>
-    <input type="range" id="boen_alarm" name="boen_alarm" min="20" max="120" step="5"
-           value="<?= v('THRESHOLDS','BOEN_ALARM','60') ?>">
-    <p style="font-size:10px;color:#888;margin:2px 0">Ab welcher Böenstärke (km/h) ein Wind-Alarm ausgelöst wird. 60 km/h = Beaufort 8 (Sturm). Gilt für INCA Nowcast und TAWES upstream.</p>
+
+<div class="slider-row">
+<label for="boen_alarm"><?= $L['MAIN.BOEN_ALARM'] ?> <span class="slider-val" id="sba"><?= v('THRESHOLDS','BOEN_ALARM','60') ?></span> km/h</label>
+<input type="range" id="boen_alarm" name="boen_alarm" min="20" max="120" step="5"
+       value="<?= v('THRESHOLDS','BOEN_ALARM','60') ?>"
+       oninput="document.getElementById('sba').textContent=this.value">
+<p style="font-size:10px;color:#888;margin:2px 0">Ab welcher Böenstärke ein Wind-Alarm ausgelöst wird. 60 km/h = Beaufort 8 (Sturm). INCA allein → max Stufe 1; INCA+TAWES → voller Alarm.</p>
 </div>
-<div class="ui-field-contain">
-    <label for="regen_alarm"><?= $L['MAIN.REGEN_ALARM'] ?> <small style="color:#888">(<?= $L['MAIN.LABEL_DEFAULT'] ?>: 10 mm/h)</small></label>
-    <input type="range" id="regen_alarm" name="regen_alarm" min="0.5" max="60" step="0.5"
-           value="<?= v('THRESHOLDS','REGEN_ALARM','10.0') ?>">
-    <p style="font-size:10px;color:#888;margin:2px 0">Ab welcher Regenrate (mm/h) ein Regen-Alarm ausgelöst wird. 2 mm/h = leichter Regen, 10 mm/h = starker Regen, 20–60 mm/h = Starkregen/Unwetter.</p>
+
+<div class="slider-row">
+<label for="regen_alarm"><?= $L['MAIN.REGEN_ALARM'] ?> <span class="slider-val" id="sra"><?= v('THRESHOLDS','REGEN_ALARM','10.0') ?></span> mm/h</label>
+<input type="range" id="regen_alarm" name="regen_alarm" min="0.5" max="60" step="0.5"
+       value="<?= v('THRESHOLDS','REGEN_ALARM','10.0') ?>"
+       oninput="document.getElementById('sra').textContent=this.value">
+<p style="font-size:10px;color:#888;margin:2px 0">Ab welcher Regenrate ein Alarm ausgelöst wird. INCA allein → max Stufe 1; INCA+TAWES → voller Alarm. 10 mm/h = starker Regen.</p>
 </div>
 </div>
 
