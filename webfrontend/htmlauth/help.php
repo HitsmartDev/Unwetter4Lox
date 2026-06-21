@@ -35,7 +35,7 @@ code { background:#f0f0f0; padding:1px 4px; border-radius:3px; font-size:10px; f
     <li><b>TAWES 360°</b> – Live-Messdaten von Wetterstationen im Umkreis → Regen-ETA, Wind-Kaskade, Lokal-Regen, Gewitter-Vorhersage</li>
 </ul>
 <p>Alle Daten landen als MQTT-Nachrichten auf deinem LoxBerry-Broker und können direkt in Loxone-Logiken (Virtual Input) verwendet werden.</p>
-<p style="font-size:11px;color:#888">Aktuelle Version: <b>0.9.9</b> | <a href="https://github.com/HitsmartDev/Unwetter4Lox" target="_blank">GitHub</a></p>
+<p style="font-size:11px;color:#888">Aktuelle Version: <b>0.9.15</b> | <a href="https://github.com/HitsmartDev/Unwetter4Lox" target="_blank">GitHub</a></p>
 </div>
 
 <!-- DATENQUELLEN -->
@@ -62,7 +62,7 @@ code { background:#f0f0f0; padding:1px 4px; border-radius:3px; font-size:10px; f
 <p>API: <code>https://dataset.api.hub.geosphere.at/v1/timeseries/forecast/nowcast-v1-15min-1km</code></p>
 <p>Hochauflösende (1 km²) Kurzfristvorhersage, alle 15 Minuten aktualisiert. Zeigt was in den nächsten 0–60 Minuten direkt an deinem Standort passiert. Ideal für: Markisen einfahren, Bewässerung stoppen, Fenster schließen.</p>
 <p>Parameter: Windgeschwindigkeit (FF), Böen (FX), Niederschlag (RR in mm/h), Niederschlagstyp (PT = Regen/Schnee/Hagel).</p>
-<p><b>Wichtig:</b> INCA-Werte benötigen keinen "Konsens" – das Nowcast-Modell hat eine eigene Qualitätskontrolle. Wenn INCA <code>fx_max_60min ≥ BOEN_ALARM</code> meldet, löst das direkt <code>alarm/wind</code> aus.</p>
+<p><b>Korrelationslogik (ab v0.9.14):</b> INCA allein → max. Alarm-Stufe 1 (Prognose unbestätigt). INCA + TAWES-Messung bestätigt → volle Stufen 1–3. INCA-Signal seit ≥4 Zyklen (~20 min) → bis Stufe 2 erlaubt ohne TAWES. ZAMG-Warnung → direktes Vertrauen, Stufe 1–3 ohne Bestätigung.</p>
 </div>
 
 <div data-role="collapsible" data-collapsed="true">
@@ -70,7 +70,7 @@ code { background:#f0f0f0; padding:1px 4px; border-radius:3px; font-size:10px; f
 <p>API: <code>https://dataset.api.hub.geosphere.at/v1/station/current/tawes-v1-10min</code></p>
 <p>Ruft alle 10 Minuten Live-Messdaten von Wetterstationen im konfigurierten Umkreis (Standard: 120 km) ab. Analysiert die Daten um Wetterfronten <em>bevor sie ankommen</em> zu erkennen:</p>
 <ul>
-    <li><b>Upstream-Erkennung:</b> Welche Stationen liegen in Windrichtung? (Vektormittelung, gewichtet nach Windstärke, ±70°)</li>
+    <li><b>Upstream-Erkennung:</b> Welche Stationen liegen in Windrichtung? (Vektormittelung, gewichtet nach Windstärke, ±45° Standard, konfigurierbar 20°–90°)</li>
     <li><b>Regen-ETA:</b> Wann kommt die Regenfront an? (Frontgeschwindigkeit aus mehreren Upstream-Stationen, max. 30-min Buffer)</li>
     <li><b>Lokal-Regen:</b> Regnet es jetzt in der Nähe (konfigurierbar, Standard: 25 km)? Unabhängig von der Windrichtung.</li>
     <li><b>Wind-Kaskade:</b> Melden Upstream-Stationen zeitlich gestaffelt hohe Böen (weit → nah)? Zeigt ein herannahendes Sturmsystem. Nur Böen aus den letzten 60 Min berücksichtigt.</li>
@@ -106,7 +106,10 @@ code { background:#f0f0f0; padding:1px 4px; border-radius:3px; font-size:10px; f
 <tr><td><code>alarm/hagel</code></td><td>0–2</td><td><b>1</b>=möglich (ZAMG Gelb od. INCA bald_hagel/graupel), <b>2</b>=Warnung (ZAMG Orange+)</td></tr>
 <tr><td><code>alarm/schnee</code></td><td>0–2</td><td><b>1</b>=möglich (ZAMG Gelb od. INCA PT=Schnee/Schneeregen), <b>2</b>=Warnung (ZAMG Orange+). Inkl. Glatteis.</td></tr>
 <tr><td><code>alarm/stufe</code></td><td>0–4</td><td>Höchste <b>offizielle ZAMG</b>-Warnstufe (nur ZAMG, kein INCA/TAWES)</td></tr>
-<tr><td><code>alarm/zusammenfassung</code></td><td>Text</td><td>Fertiger Anzeigetext aus allen aktiven Kategorien. Ideal für Loxone-Statusfeld.</td></tr>
+<tr><td><code>alarm/konfidenz</code> <span class="tag-new">NEU</span></td><td>0–100</td><td>Konfidenz-Score der Alarm-Bewertung. 0–39 = schwaches Signal (eine Quelle), 40–69 = bestätigt (zwei Quellen), 70+ = hohe Sicherheit (alle Quellen + Trend). Ersetzt <code>alarm/regen_konfidenz</code>.</td></tr>
+<tr><td><code>alarm/eta_min</code> <span class="tag-new">NEU</span></td><td>Minuten / -1</td><td>Beste verfügbare ETA-Schätzung (trend-korrigiert wenn ≥3 Zyklen). -1 = kein ETA bekannt.</td></tr>
+<tr><td><code>alarm/regen_trend</code> <span class="tag-new">NEU</span></td><td>Text</td><td>Richtung des Regen-Trends: <code>zunehmend</code> / <code>abnehmend</code> / <code>stabil</code> / <code>unbekannt</code> (Trend-Engine, letzten ~40 min).</td></tr>
+<tr><td><code>alarm/zusammenfassung</code></td><td>Text</td><td>Fertiger Anzeigetext inkl. Quelle + ETA. z.B. <code>Regen:2 [INCA+TAWES (25mm/h)] ETA ~8min ↑</code>. Ideal für Loxone-Statusfeld.</td></tr>
 <tr><td><code>alarm/entwarnung</code></td><td>0 / 1</td><td>Wechselt einmalig auf <code>1</code> wenn <code>alarm/gesamt</code> von ≥1 auf 0 fällt. Danach sofort wieder 0. Gate für Entwarnung-Push.</td></tr>
 </tbody>
 </table>
@@ -255,31 +258,42 @@ code { background:#f0f0f0; padding:1px 4px; border-radius:3px; font-size:10px; f
 
 <div data-role="collapsible" data-collapsed="true">
 <h4>🔔 notification/ – Fertige Push-Texte</h4>
-<p>Werden <b>nur bei Änderung</b> publiziert (kein Spam). <b>INCA, TAWES und Alle werden nur publiziert wenn <code>alarm/gesamt ≥ 1</code></b> – kein Push bei normalem Wetter ohne Alarm. Bei Entwarnung (Alarm fällt auf 0) wird einmalig der Entwarnung-Text gesendet, danach sind die Topics leer. <code>notification/geosphere</code> ist immer aktiv (offizielle ZAMG-Warnungen).</p>
-<p><b>Hinweis notification/alle:</b> Enthält nur Quellen die aktiv zu einem Alarm beitragen. Wenn INCA keinen eigenen Alarm hat (aber TAWES schon), erscheint der INCA-Status <i>nicht</i> in <code>notification/alle</code>.</p>
+<p><b>Verhalten ab v0.9.15:</b></p>
+<ul style="font-size:11px">
+<li><code>notification/geosphere</code> – immer befüllt (aktive ZAMG-Warnungen oder "keine aktiven Warnungen")</li>
+<li><code>notification/inca</code> – <b>immer gesendet</b> (auch ohne Alarm) – zeigt INCA-Nowcast-Status für Loxone-Anzeige</li>
+<li><code>notification/tawes</code> – <b>immer gesendet</b> (auch ohne Alarm) – zeigt TAWES-Messnetz-Status</li>
+<li><code>notification/tageswarnung</code> – <b>NEU:</b> ZAMG-Warnungen die in den nächsten 8h beginnen ("Morgeninfo")</li>
+<li><code>notification/alle</code> – bei Alarm: kombinierte Meldung | bei Entwarnung: Entwarnung-Text | kein Alarm: Tageswarnung (wenn vorhanden) oder leer</li>
+</ul>
 <table class="mqtt-table">
 <thead><tr><th>Topic</th><th>Bedeutung</th><th>Beispielwerte</th></tr></thead>
 <tbody>
-<tr><td><code>notification/geosphere</code></td><td>ZAMG-Warnungen ab konfigurierter Mindeststufe. <b>Immer befüllt.</b></td><td>
+<tr><td><code>notification/geosphere</code></td><td>ZAMG aktive Warnungen. <b>Immer befüllt.</b></td><td>
 <code>⚠️ ORANGE – Wind | heute 14:00 – morgen 06:00</code><br>
-<code>keine aktiven Warnungen</code> (kein Alarm)<br>
-<code>✅ Entwarnung – alle Wetterwarnungen aufgehoben.</code> (nach Ende)</td></tr>
-<tr><td><code>notification/inca</code></td><td>INCA Nowcast-Lage. <b>Nur bei alarm/gesamt ≥ 1.</b> Leer wenn kein Alarm.</td><td>
-<code>🟠 Sturmböen &lt;30 min: max 75 km/h</code><br>
-<code>🌧️ Regen in ~8 min</code><br>
-<code></code> (leer wenn kein aktiver Alarm)</td></tr>
-<tr><td><code>notification/tawes</code></td><td>TAWES-Lagebericht. <b>Nur bei alarm/gesamt ≥ 1.</b> Leer wenn kein Alarm.</td><td>
-<code>💨 Sturmböen upstream 85 km/h</code><br>
-<code>🌧️ Regenfront ~18min | 62km/h aus W | 78% Konfidenz</code><br>
-<code>💨 Sturmfront naht aus NW | ETA ~12min | Gmunden+Vöcklabruck</code><br>
-<code></code> (leer wenn kein aktiver Alarm)</td></tr>
-<tr><td><code>notification/alle</code></td><td>Alle aktiven Alarm-Meldungen kombiniert (durch ── getrennt). <b>Nur bei alarm/gesamt ≥ 1</b> oder Entwarnung. Enthält <b>keine</b> "kein Alarm"-Texte aus Quellen die selbst keinen Alarm haben. – <b>Empfehlung für Loxone Push</b></td><td>
-<code>⚠️ ORANGE – Wind | ... ── 🟠 Sturmböen &lt;30 min ── 💨 Sturmfront naht</code><br>
-<code>🌧️ Regenfront ~10min | 110km/h aus W | 90% Konfidenz</code><br>
-<code>✅ Entwarnung – alle Wetterwarnungen aufgehoben.</code> (einmalig)<br>
-<code></code> (leer wenn kein aktiver Alarm)</td></tr>
+<code>keine aktiven Warnungen</code></td></tr>
+<tr><td><code>notification/tageswarnung</code> <span class="tag-new">NEU</span></td><td>ZAMG Warnungen die in den nächsten 8h beginnen (für Morgenroutine 07:00). Leer wenn nichts in Sicht.</td><td>
+<code>📅 heute 16:00: GELB Gewitter</code><br>
+<code>📅 heute 14:00: ORANGE Regen | 📅 morgen: GELB Schnee ab 22:00</code><br>
+<code></code> (leer = kein Unwetter heute)</td></tr>
+<tr><td><code>notification/inca</code></td><td>INCA Nowcast-Status. <b>Immer gesendet</b> – auch ohne Alarm (für Loxone-Anzeige nutzbar).</td><td>
+<code>🟠 Sturmböen in &lt;30min: max 75 km/h</code><br>
+<code>🌧️ Regen in ~12min ✓ TAWES | 85% Konfidenz</code><br>
+<code>🌧️ Regen jetzt: 18mm/h ✓ TAWES ↑ zunehmend</code><br>
+<code>✅ Ruhig | Wind: 12km/h | Kein Niederschlag</code></td></tr>
+<tr><td><code>notification/tawes</code></td><td>TAWES Messnetz-Status. <b>Immer gesendet.</b></td><td>
+<code>💨 Sturmböen upstream: 85km/h aus WNW (4 Stationen)</code><br>
+<code>🌧️ Regen upstream: 22mm/h aus W | ETA ~15min ↑</code><br>
+<code>🌧️ Lokal-Regen: VÖCKLABRUCK (12km) – 8mm/h</code><br>
+<code>✅ 18 Stationen aktiv | Wind: 32km/h aus NW | kein Alarm-Signal</code></td></tr>
+<tr><td><code>notification/alle</code></td><td>Hauptnachricht für Loxone Push. Bei Alarm: alle Quellen kombiniert. <b>Empfehlung für Loxone Push-Button.</b></td><td>
+<code>ORANGE – Wind | 14:00–20:00 ── 🟠 Sturmböen &lt;30min: 78km/h ── 💨 Sturmfront aus WNW ETA ~8min</code><br>
+<code>🌧️ Regen:2 [INCA+TAWES (25mm/h)] ETA ~8min ↑</code><br>
+<code>📅 heute 16:00: GELB Gewitter</code> (kein aktiver Alarm, Tageswarnung)<br>
+<code>✅ Entwarnung – alle Wetterwarnungen aufgehoben.</code></td></tr>
 </tbody>
 </table>
+<p style="font-size:11px;color:#888"><b>Loxone Morgenroutine (Empfehlung):</b> Zeitprogramm 07:00 → Gate auf <code>notification/tageswarnung</code> ≠ leer → Push senden. So bekommst du nur dann eine Morgenmeldung wenn heute noch Unwetter kommt. <code>notification/alle</code> als Loxone-Textfeld für die laufende Wetterwarnung.</p>
 </div>
 
 <div data-role="collapsible" data-collapsed="true">
@@ -327,8 +341,35 @@ code { background:#f0f0f0; padding:1px 4px; border-radius:3px; font-size:10px; f
 <tr><td><b>Konsens-Schwelle</b></td><td>30 %</td><td>Mindestanteil der Upstream-Tal-Stationen die den Schwellwert überschreiten müssen. Min. 2 Stationen absolut. Verhindert False-Alarms durch einzelne Ausreißer.</td></tr>
 <tr><td><b>Max. Seehöhe Upstream</b></td><td>1200 m</td><td>Upstream-Stationen über dieser Höhe werden aus dem Wind-Alarm-Konsens ausgeschlossen. Bergstationen messen natürlich stärkere Winde als das Tal. 0 = alle Höhen einbeziehen.</td></tr>
 <tr><td><b>Lokal-Regen Umkreis</b></td><td>25 km</td><td>Umkreis für <code>tawes/regen_lokal</code>. Stationen in diesem Radius die aktuell Regen melden, aktivieren den lokalen Regen-Check (unabhängig von Windrichtung). Stationen außerhalb sind in der Anzeige sichtbar, lösen aber keinen <code>alarm/regen</code> aus.</td></tr>
+<tr><td><b>Upstream-Kegel</b></td><td>45°</td><td>Halbwinkel des Kegels in dem Stationen als "Upstream" gelten. 45° = 90° Gesamtkegel. 70° war Standard (zu breit: SW und NW konnten beide upstream sein). Kleiner Winkel = präziser, aber weniger Stationen. Empfehlung: 30°–50°.</td></tr>
 </tbody>
 </table>
+</div>
+<div data-role="collapsible" data-collapsed="true">
+<h4>🛰️ INCA Nowcast – Parameter</h4>
+<table class="mqtt-table">
+<thead><tr><th>Parameter</th><th>Standard</th><th>Erklärung</th></tr></thead>
+<tbody>
+<tr><td><b>Nowcast Horizont</b></td><td>60 min</td><td>Wie weit INCA vorausschaut. 60 min = Maximum, empfohlen für 15–60 min Vorwarnzeit. 15 min = nur aktueller Moment.</td></tr>
+<tr><td><b>Böen-Schwellwert</b></td><td>60 km/h</td><td>Geteilt mit TAWES. INCA allein → max. Stufe 1. INCA + TAWES bestätigt → Stufe 1–3.</td></tr>
+<tr><td><b>Regen-Schwellwert</b></td><td>10 mm/h</td><td>Geteilt mit TAWES. INCA allein → max. Stufe 1. INCA + TAWES bestätigt → Stufe 1–3. INCA-Signal seit ≥4 Zyklen → bis Stufe 2.</td></tr>
+</tbody>
+</table>
+</div>
+<div data-role="collapsible" data-collapsed="true">
+<h4>📈 Trend-Engine (ab v0.9.15)</h4>
+<p>Die Trend-Engine analysiert die letzten ~40 Minuten (8 Zyklen × ~5 min) und verbessert die Alarmqualität über Zeit:</p>
+<table class="mqtt-table">
+<thead><tr><th>Funktion</th><th>Beschreibung</th></tr></thead>
+<tbody>
+<tr><td><b>Regen-Trend</b></td><td>Nimmt Regen zu (<code>zunehmend</code>) oder ab (<code>abnehmend</code>)? Basiert auf linearer Regression der kombinierten INCA+TAWES Intensitätsserie.</td></tr>
+<tr><td><b>Wind-Trend</b></td><td>Wie entwickeln sich die Böen über die letzten Zyklen?</td></tr>
+<tr><td><b>Konfidenz-Bonus</b></td><td>+5 Punkte je konsistentem Zyklus in gleiche Richtung, max +25. Fließt in <code>alarm/konfidenz</code> ein.</td></tr>
+<tr><td><b>ETA-Korrektur</b></td><td>Wenn INCA <code>minuten_bis_regen</code> über mehrere Zyklen abnimmt (z.B. 45→30→15 min), wird der ETA extrapoliert. Zuverlässiger als ein Einzelwert. Sichtbar in <code>alarm/eta_min</code>.</td></tr>
+<tr><td><b>INCA-Trend-Eskalation</b></td><td>Wenn INCA seit ≥4 Zyklen (~20 min) konstant Regen/Wind signalisiert, wird die Alarm-Maximal-Stufe von 1 auf 2 erhöht – auch ohne TAWES-Bestätigung.</td></tr>
+</tbody>
+</table>
+<p style="font-size:11px;color:#888">Die Trend-Engine startet kalt (leer) und braucht ~15–20 Minuten nach Daemon-Start bis sie zuverlässige Werte liefert.</p>
 </div>
 </div>
 

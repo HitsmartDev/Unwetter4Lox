@@ -1,4 +1,4 @@
-"""Unwetter4Lox Daemon v0.9.14 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
+"""Unwetter4Lox Daemon v0.9.15 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math, re, traceback, socket
 from datetime import datetime, timezone, timedelta
 from collections import deque
@@ -125,6 +125,91 @@ TAWES_MAX_UPSTREAM_HOEHE = float(get_cfg('TAWES', 'MAX_UPSTREAM_HOEHE_M', '1200'
 TAWES_REGEN_LOKAL_KM     = max(5.0, min(100.0, float(get_cfg('TAWES', 'REGEN_LOKAL_KM', '25'))))
 # Upstream-Kegel: Halbwinkel in Grad (45° = 90° Gesamtkegel; war 70° = zu breit)
 TAWES_UPSTREAM_WINKEL = max(20, min(90, int(get_cfg('TAWES', 'UPSTREAM_WINKEL_GRAD', '45'))))
+
+# ---------------------------------------------------------------------------
+# Trend-Engine – Zeitreihe der letzten Zyklen (Multi-Source Fusion)
+# ---------------------------------------------------------------------------
+# Puffert Schlüsselwerte aus INCA + TAWES für Trend-Analyse.
+# max 8 Einträge × ~5min Zykluszeit = ~40 Minuten Verlaufsfenster.
+# Daraus werden ETA-Korrekturen, Konfidenz-Bonus und Trendaussagen berechnet.
+_TREND_HISTORY = deque(maxlen=8)
+
+def _add_trend(inca, tawes):
+    """Fügt aktuellen Messzyklus zur Trend-History hinzu."""
+    _TREND_HISTORY.append({
+        'ts':           int(time.time()),
+        'inca_rr':      (inca  or {}).get('rr_jetzt',        0) or 0,
+        'inca_fx60':    (inca  or {}).get('fx_max_60min',     0) or 0,
+        'inca_eta':     (inca  or {}).get('minuten_bis_regen',-1),
+        'tawes_rr_up':  (tawes or {}).get('regen_upstream_mm',0) or 0,
+        'tawes_fx_up':  (tawes or {}).get('wind_upstream_kmh', 0) or 0,
+        'tawes_regen':  int(bool((tawes or {}).get('regen_upstream',0) or (tawes or {}).get('regen_lokal',0))),
+        'tawes_sturm':  int(bool((tawes or {}).get('sturm_upstream',0) or (tawes or {}).get('wind_kaskade',0))),
+    })
+
+def _analyse_trend():
+    """Multi-Source Trendanalyse über den Verlauf der letzten Zyklen.
+
+    Berechnet:
+    - regen_trend / wind_trend: 'zunehmend' | 'abnehmend' | 'stabil'
+    - konfidenz_bonus (0-25): Aufschlag wenn mehrere Zyklen in gleiche Richtung zeigen
+    - eta_korrigiert: extrapolierter ETA (Minuten) aus INCA-Zeitreihe
+    - n_quellen_aktiv: Anzahl Quellen mit Signal in letztem Zyklus (0-3)
+    - rr_slope / fx_slope: Steigung der kombinierten Intensitätsserie (mm/h pro Zyklus)
+    - inca_trend_zyklen: wie viele aufeinander folgende Zyklen zeigt INCA Regen-Signal
+
+    Gibt leeres Dict zurück wenn < 3 Einträge vorhanden.
+    """
+    h = list(_TREND_HISTORY)
+    if len(h) < 2:
+        return {'regen_trend': 'unbekannt', 'wind_trend': 'unbekannt',
+                'konfidenz_bonus': 0, 'eta_korrigiert': -1, 'n_quellen_aktiv': 0,
+                'rr_slope': 0.0, 'fx_slope': 0.0, 'inca_trend_zyklen': 0}
+
+    # Gewichtete kombinierte Serien: INCA = direkt am Standort, TAWES = Upstream-Messung
+    rr_serie = [e['inca_rr'] * 1.0 + e['tawes_rr_up'] * 0.5 for e in h]
+    fx_serie = [max(e['inca_fx60'], e['tawes_fx_up'])         for e in h]
+
+    rr_slope = _linreg_slope(rr_serie)   # mm/h pro Zyklus
+    fx_slope = _linreg_slope(fx_serie)   # km/h pro Zyklus
+
+    regen_trend = 'zunehmend' if rr_slope > 0.3 else ('abnehmend' if rr_slope < -0.3 else 'stabil')
+    wind_trend  = 'zunehmend' if fx_slope > 1.0 else ('abnehmend' if fx_slope < -1.0 else 'stabil')
+
+    # Konsistenz: wie viele aufeinanderfolgende Schritte zeigen die gleiche Richtung?
+    n_cons_rr = sum(1 for i in range(1, len(h)) if (rr_serie[i] - rr_serie[i-1]) * rr_slope > 0)
+    n_cons_fx = sum(1 for i in range(1, len(h)) if (fx_serie[i] - fx_serie[i-1]) * fx_slope > 0)
+    # Bonus: pro konsistenter Stufe +5 Punkte, max 25
+    konfidenz_bonus = min(25, max(n_cons_rr, n_cons_fx) * 5)
+
+    # Wie viele aufeinanderfolgende Zyklen zeigt INCA Regen-Signal?
+    inca_trend_zyklen = 0
+    for e in reversed(h):
+        if e['inca_rr'] >= REGEN_ALARM or e['inca_eta'] >= 0: inca_trend_zyklen += 1
+        else: break
+
+    # ETA-Korrektur: lineare Extrapolation der INCA minuten_bis_regen-Serie
+    eta_serie = [e['inca_eta'] for e in h if e['inca_eta'] >= 0]
+    eta_korrigiert = -1
+    if len(eta_serie) >= 3:
+        eta_sl = _linreg_slope(eta_serie)
+        if eta_sl < -1.5:  # ETA nimmt ab → Regen nähert sich sicher
+            eta_korrigiert = max(0, int(eta_serie[-1] + eta_sl))
+
+    # Aktive Quellen im letzten Zyklus
+    last = h[-1]
+    n_quellen = int(last['inca_rr'] >= REGEN_ALARM or last['inca_eta'] >= 0) + \
+                int(last['tawes_regen']) + \
+                int(last['inca_fx60'] >= BOEN_ALARM or last['tawes_sturm'])
+    # Normiert auf max 3 (Regen-Quellen + Wind-Quellen ≠ 3, aber als Näherungswert OK)
+    n_quellen_aktiv = min(3, n_quellen)
+
+    return {
+        'regen_trend': regen_trend, 'wind_trend': wind_trend,
+        'konfidenz_bonus': konfidenz_bonus, 'eta_korrigiert': eta_korrigiert,
+        'n_quellen_aktiv': n_quellen_aktiv, 'rr_slope': round(rr_slope, 2),
+        'fx_slope': round(fx_slope, 2), 'inca_trend_zyklen': inca_trend_zyklen,
+    }
 
 MQTT_BROKER = '127.0.0.1'; MQTT_PORT = 1883; MQTT_USER = ''; MQTT_PASS = ''
 USE_LB_MQTT = get_cfg('MQTT', 'USE_LOXBERRY_MQTT', '1') == '1'
@@ -556,8 +641,10 @@ def fetch_zamg():
     if not raw:
         for k in ('items', 'data', 'Warnings'):
             if k in data: raw = data[k]; break
-    result = {wt: {'stufe':0,'aktiv':0,'bald':0,'start_epoch':0,'end_epoch':0,'notification':''} for wt in WARN_TYPES_FULL.values()}
-    max_stufe = 0; akut = 0; irgendwas = 0; warn_texts = []
+    result = {wt: {'stufe':0,'aktiv':0,'bald':0,'tageswarnung':0,'start_epoch':0,'end_epoch':0,'notification':''} for wt in WARN_TYPES_FULL.values()}
+    max_stufe = 0; akut = 0; irgendwas = 0; warn_texts = []; tages_texts = []
+    # Tageswarnung-Horizont: bis zu 8 Stunden voraus (für Morgeninfo im notification/tageswarnung)
+    TAGES_HORIZONT = 8 * 3600
     for w in raw:
         p = w.get('properties', w)
         try: wtype = int(p.get('wtype', p.get('type', p.get('warningtype', 0))))
@@ -569,25 +656,34 @@ def fetch_zamg():
         s_ep = _parse_iso(p.get('startzeit', p.get('validFrom', p.get('start', ''))))
         e_ep = _parse_iso(p.get('endzeit',   p.get('validTo',   p.get('end',   ''))))
         if e_ep == 0: e_ep = s_ep + 86400
-        is_act  = s_ep <= now_ts <= e_ep
-        is_soon = not is_act and 0 < (s_ep - now_ts) <= 1800
-        if not (is_act or is_soon): continue
+        is_act   = s_ep <= now_ts <= e_ep
+        is_soon  = not is_act and 0 < (s_ep - now_ts) <= 1800
+        is_today = not is_act and not is_soon and 0 < (s_ep - now_ts) <= TAGES_HORIZONT
+        if not (is_act or is_soon or is_today): continue
         if p.get('akutwarnung', p.get('gwa', p.get('isGWA', 0))): akut = 1
         if wlevel > result[typ]['stufe']:
             result[typ]['stufe'] = wlevel; result[typ]['start_epoch'] = s_ep; result[typ]['end_epoch'] = e_ep
-        result[typ]['aktiv'] = max(result[typ]['aktiv'], int(is_act))
-        result[typ]['bald']  = max(result[typ]['bald'],  int(is_soon))
-        max_stufe = max(max_stufe, wlevel); irgendwas = 1
+        result[typ]['aktiv']       = max(result[typ]['aktiv'],       int(is_act))
+        result[typ]['bald']        = max(result[typ]['bald'],        int(is_soon))
+        result[typ]['tageswarnung']= max(result[typ]['tageswarnung'], int(is_today))
         sf = _STUFE_FARBE.get(wlevel, f'Stufe {wlevel}')
         tn = L.get(typ, typ.upper())
         nt = f'{sf} – {tn} | {fmt_dt(s_ep)} – {fmt_dt(e_ep)}'
         result[typ]['notification'] = nt
-        if nt not in warn_texts: warn_texts.append(nt)
-    n_active = len([t for t, v in result.items() if v['stufe'] > 0])
-    log.info(f'GeoSphere ZAMG: OK | {n_active} Warntypen aktiv | max_stufe={max_stufe} | akut={akut}')
+        if is_act or is_soon:
+            max_stufe = max(max_stufe, wlevel); irgendwas = 1
+            if nt not in warn_texts: warn_texts.append(nt)
+        elif is_today:
+            tt = f'📅 {fmt_dt(s_ep)}: {sf} {tn}'
+            if tt not in tages_texts: tages_texts.append(tt)
+    n_active = len([t for t, v in result.items() if v['aktiv']])
+    n_today  = len([t for t, v in result.items() if v['tageswarnung']])
+    log.info(f'GeoSphere ZAMG: OK | {n_active} aktiv | {n_today} Tageswarnungen | max_stufe={max_stufe} | akut={akut}')
+    notif_tages = ' | '.join(tages_texts) if tages_texts else ''
     return {**result, 'max_stufe':max_stufe, 'akutwarnung':akut, 'irgendwas_aktiv':irgendwas,
             'letzter_abruf':datetime.now().astimezone().strftime('%d.%m.%Y %H:%M:%S'),
-            'notification_geosphere':(' | '.join(warn_texts) if warn_texts else L['no_warns']), '_api_ok':True}
+            'notification_geosphere':(' | '.join(warn_texts) if warn_texts else L['no_warns']),
+            'notification_tageswarnung': notif_tages, '_api_ok':True}
 
 # ---------------------------------------------------------------------------
 # INCA Nowcast
@@ -692,75 +788,94 @@ def _stufe_al(s): return 0 if s<=0 else (1 if s==1 else (2 if s==2 else 3))
 def _mm_al(mm):   return 0 if mm < REGEN_ALARM else (3 if mm >= 3*REGEN_ALARM else (2 if mm >= 2*REGEN_ALARM else 1))
 def _fx_al(fx):   return 0 if fx < BOEN_ALARM  else (3 if fx >= 3*BOEN_ALARM  else (2 if fx >= 2*BOEN_ALARM  else 1))
 
-def build_alarm(zamg, inca, tawes, prev_alarm):
-    """Alarm-Aggregation mit Korrelations-Logik:
-    - ZAMG (amtl. Warnung): voller Vertrauen, direkte Level 1-3
-    - INCA allein: max Level 1 (Prognose, nicht gemessen – kann False-Positive sein)
-    - INCA + TAWES bestätigt: voller Level 1-3
-    - TAWES allein: max Level 1 upstream (Messung, aber könnte vorbeiziehen)
+def build_alarm(zamg, inca, tawes, prev_alarm, trend=None):
+    """Multi-Source Alarm-Fusion mit Konfidenz-Scoring und Trend-Eskalation.
+
+    Datenschichten:
+      ZAMG  – amtl. GeoSphere Warnung → direktes Vertrauen, Level 1-3 ohne Korroboration
+      INCA  – 15-min Nowcast (Modell) → allein max Level 1; mit Trend-Bestätigung max Level 2
+      TAWES – Realmessungen der Umgebungsstationen → allein max Level 1;
+              kombiniert mit INCA → voller Level 1-3
+
+    Konfidenz-Score 0-100:
+      Basis: ZAMG aktiv = 40 | INCA Signal = 30 | TAWES Signal = 20
+      Bonus: Trend konsistent über ≥3 Zyklen = +10…+25 (aus trend['konfidenz_bonus'])
     """
     z = zamg or {}; i = inca or {}; t = tawes or {}
+    tr = trend or {}
+
+    trend_bonus   = tr.get('konfidenz_bonus', 0)    # 0-25 aus Trend-Engine
+    inca_zyklen   = tr.get('inca_trend_zyklen', 0)  # wie lange INCA schon Signal hat
+    regen_trend   = tr.get('regen_trend', 'unbekannt')
+    eta_korr      = tr.get('eta_korrigiert', -1)    # extrapolierter ETA aus Zeitreihe
 
     # === REGEN ===
-    a_r = 0; rq = '–'; r_conf = ''
+    a_r = 0; rq = '–'; conf_r = 0
     zr = _stufe_al(z.get('regen',{}).get('stufe',0))
-    if zr: a_r = max(a_r, zr); rq = 'ZAMG'
+    if zr: a_r = max(a_r, zr); rq = 'ZAMG'; conf_r = max(conf_r, 40)
 
-    rr = i.get('rr_jetzt', 0) or 0
-    ir_raw = _mm_al(rr)
-    tawes_regen = bool(t.get('regen_upstream', 0) or t.get('regen_lokal', 0))
+    rr      = i.get('rr_jetzt', 0) or 0
+    eta     = i.get('minuten_bis_regen', -1)
+    ir_raw  = _mm_al(rr) or (1 if eta >= 0 else 0)  # ETA-Signal auch ohne akuten Regen
+    tawes_regen  = bool(t.get('regen_upstream', 0) or t.get('regen_lokal', 0))
+    up_mm   = t.get('regen_upstream_mm', 0) or 0
+    lok_mm  = t.get('regen_lokal_mm', 0) or 0
+
     if ir_raw:
+        conf_r += 30  # INCA Signal
         if tawes_regen or zr:
-            # INCA durch TAWES oder ZAMG bestätigt → voller Level
-            ir = ir_raw; r_conf = 'bestätigt'
-            rq = (f'INCA+TAWES ({rr}mm/h)' if tawes_regen else f'INCA+ZAMG ({rr}mm/h)')
+            # INCA + TAWES/ZAMG: voller Level
+            ir = max(_mm_al(rr), 1); rq = f'INCA+TAWES ({rr}mm/h)' if tawes_regen else f'INCA+ZAMG ({rr}mm/h)'
+        elif inca_zyklen >= 4:
+            # INCA allein, aber Trend seit ≥4 Zyklen bestätigt → bis Level 2 erlaubt
+            ir = min(2, max(_mm_al(rr), 1))
+            rq = f'INCA ({rr}mm/h, Trend {inca_zyklen} Zyklen)'
         else:
-            # INCA allein (nur Nowcast, keine Messung) → max Level 1
-            ir = min(1, ir_raw); r_conf = 'Prognose'
-            rq = f'INCA ({rr}mm/h) – unbestätigt'
+            # INCA allein ohne Trend → max Level 1
+            ir = min(1, max(_mm_al(rr), int(eta >= 0)))
+            rq = f'INCA ({rr}mm/h)' if rr > 0 else f'INCA (Regen ~{eta}min)'
         a_r = max(a_r, ir)
 
-    up_mm = t.get('regen_upstream_mm', 0) or 0
-    if _mm_al(up_mm):
-        # TAWES upstream allein (keine INCA Bestätigung) → max Level 1
-        tr = _mm_al(up_mm) if ir_raw else min(1, _mm_al(up_mm))
-        a_r = max(a_r, tr)
-        if rq == '–': rq = f'TAWES_UPSTREAM ({up_mm}mm/h)'
-
-    lok_mm = t.get('regen_lokal_mm', 0) or 0
-    if _mm_al(lok_mm):
-        # Lokaler Regen: max Level 1 allein
+    if tawes_regen:
+        conf_r += 20  # TAWES Signal
+    if up_mm > 0 and _mm_al(up_mm):
+        tr_lvl = _mm_al(up_mm) if ir_raw else min(1, _mm_al(up_mm))
+        a_r = max(a_r, tr_lvl)
+        if rq == '–': rq = f'TAWES_UP ({up_mm}mm/h)'
+    if lok_mm > 0 and _mm_al(lok_mm):
         a_r = max(a_r, min(1, _mm_al(lok_mm)))
-        if rq == '–': rq = f'TAWES_LOKAL ({t.get("regen_lokal_station","")}) {lok_mm}mm/h'
+        if rq == '–': rq = f'TAWES_LOK ({t.get("regen_lokal_station","")}) {lok_mm}mm/h'
+
+    # Trend-Bonus auf Konfidenz, limitiert auf max Level
+    conf_r = min(100, conf_r + trend_bonus)
 
     # === WIND ===
-    a_w = 0; wq = '–'
+    a_w = 0; wq = '–'; conf_w = 0
     zw = _stufe_al(z.get('wind',{}).get('stufe',0))
-    if zw: a_w = max(a_w, zw); wq = 'ZAMG'
+    if zw: a_w = max(a_w, zw); wq = 'ZAMG'; conf_w = max(conf_w, 40)
 
-    fx60 = i.get('fx_max_60min', 0) or 0
-    iw_raw = _fx_al(fx60)
+    fx60     = i.get('fx_max_60min', 0) or 0
+    iw_raw   = _fx_al(fx60)
     tawes_wind = bool(t.get('sturm_upstream', 0) or t.get('wind_kaskade', 0))
+    w_up     = t.get('wind_upstream_kmh', 0) or 0
+
     if iw_raw:
+        conf_w += 30
         if tawes_wind or zw:
-            iw = iw_raw  # bestätigt → voller Level
-            wq = (f'INCA+TAWES ({fx60}km/h)' if tawes_wind else f'INCA+ZAMG ({fx60}km/h)')
+            iw = iw_raw; wq = f'INCA+TAWES ({fx60}km/h)' if tawes_wind else f'INCA+ZAMG ({fx60}km/h)'
         else:
-            iw = min(1, iw_raw)  # INCA allein → max Level 1
-            wq = f'INCA ({fx60}km/h) – unbestätigt'
+            iw = min(1, iw_raw); wq = f'INCA ({fx60}km/h)'
         a_w = max(a_w, iw)
-
-    w_up = t.get('wind_upstream_kmh', 0) or 0
+    if tawes_wind: conf_w += 20
     if t.get('sturm_upstream', 0):
-        tw = _fx_al(w_up)
-        # TAWES Sturm allein → max Level 1 wenn kein INCA
-        if not iw_raw: tw = min(1, tw)
-        if tw: a_w = max(a_w, tw); wq = f'TAWES_STURM ({w_up}km/h)'
+        tw = _fx_al(w_up) if iw_raw else min(1, _fx_al(w_up))
+        if tw: a_w = max(a_w, tw); wq = wq if wq != '–' else f'TAWES_STURM ({w_up}km/h)'
     if t.get('wind_kaskade', 0) and a_w == 0: a_w = 1; wq = 'TAWES_KASKADE'
+    conf_w = min(100, conf_w + trend_bonus)
 
-    # === GEWITTER / HAGEL / SCHNEE (ZAMG-basiert, unverändert) ===
+    # === GEWITTER / HAGEL / SCHNEE ===
     a_g = _stufe_al(z.get('gewitter',{}).get('stufe',0))
-    gs = int(t.get('gewitter_signal', 0) or 0)
+    gs  = int(t.get('gewitter_signal', 0) or 0)
     if gs >= 1: a_g = max(a_g, 1)
     if gs >= 2: a_g = max(a_g, 2)
     if z.get('akutwarnung', 0): a_g = max(a_g, 2)
@@ -772,68 +887,103 @@ def build_alarm(zamg, inca, tawes, prev_alarm):
     if i.get('pt_jetzt',255) in (2,3): a_s = max(a_s, 1)
 
     a_ges = max(a_w, a_r, a_g, a_h, a_s)
+    konfidenz = max(conf_r, conf_w) if a_ges > 0 else 0
     prev_g = int((prev_alarm or {}).get('gesamt', 0))
     entw = int(prev_g >= 1 and a_ges == 0)
 
-    # Zusammenfassung mit Quelle (für MQTT alarm/zusammenfassung)
+    # ETA: priorisiere korrigierte Trendextrapolation über INCA-Rohwert
+    eta_best = eta_korr if eta_korr >= 0 else (eta if eta >= 0 else -1)
+
+    # Zusammenfassung mit Quelle und ETA (für MQTT alarm/zusammenfassung und Loxone)
     parts = []
     if a_w > 0: parts.append(f'Wind:{a_w} [{wq}]')
-    if a_r > 0: parts.append(f'Regen:{a_r} [{rq}]')
+    if a_r > 0:
+        rp = f'Regen:{a_r} [{rq}]'
+        if eta_best >= 0: rp += f' ETA ~{eta_best}min'
+        if regen_trend == 'zunehmend': rp += ' ↑'
+        parts.append(rp)
     if a_g > 0: parts.append(f'Gewitter:{a_g}')
     if a_h > 0: parts.append(f'Hagel:{a_h}')
     if a_s > 0: parts.append(f'Schnee:{a_s}')
     zusf = ', '.join(parts) if parts else ('Entwarnung' if entw else 'Ruhig')
 
     return {'gesamt':a_ges,'wind':a_w,'regen':a_r,'gewitter':a_g,'hagel':a_h,'schnee':a_s,
-            'stufe':z.get('max_stufe',0),'wind_quelle':wq,'regen_quelle':rq,'regen_konfidenz':r_conf,
+            'stufe':z.get('max_stufe',0),'wind_quelle':wq,'regen_quelle':rq,
+            'konfidenz':konfidenz,'eta_min':eta_best,'regen_trend':regen_trend,
             'entwarnung':entw,'zusammenfassung':zusf}
 
 def _notification_inca(i, alarm=None):
-    """INCA Status-Nachricht – immer gesendet, auch ohne Alarm (Loxone-Anzeige)."""
+    """INCA Nowcast-Nachricht – immer gesendet, liefert 15-60-min Vorschau für Loxone."""
     if not i: return ''
-    fx60 = i.get('fx_max_60min',0) or 0; rr = i.get('rr_jetzt',0) or 0
-    rq = (alarm or {}).get('regen_quelle', '')
+    fx60 = i.get('fx_max_60min', 0) or 0
+    rr   = i.get('rr_jetzt', 0) or 0
+    eta  = i.get('minuten_bis_regen', -1)
+    al   = alarm or {}
+    rq   = al.get('regen_quelle', '')
+    kfz  = al.get('konfidenz', 0)
+    rtr  = al.get('regen_trend', '')
+    eta_b= al.get('eta_min', eta)   # Trend-korrigierter ETA hat Vorrang
     parts = []
-    if i.get('bald_sturm_30'): parts.append(L['sturm_30'].format(v=round(fx60,0)))
-    elif i.get('bald_sturm_60'): parts.append(L['sturm_60'].format(v=round(fx60,0)))
-    if i.get('bald_hagel'): parts.append(L['hagel_60'])
-    elif i.get('bald_graupel'): parts.append(L['graupel_60'])
+    # Wind
+    if i.get('bald_sturm_30'):
+        parts.append(f'🟠 Sturmböen in <30min: max {round(fx60)}km/h')
+    elif i.get('bald_sturm_60'):
+        parts.append(f'⚠️ Sturmböen in <60min: max {round(fx60)}km/h')
+    # Hagel / Graupel
+    if i.get('bald_hagel'):   parts.append('🔴 Hagel in <60min erwartet')
+    elif i.get('bald_graupel'): parts.append('⚠️ Graupel möglich')
+    # Regen
     if rr >= REGEN_ALARM:
-        conf = ' ✓ TAWES' if 'TAWES' in rq else (' ✓ ZAMG' if 'ZAMG' in rq else ' ⚠ Prognose')
-        parts.append(L['regen_jetzt'].format(v=rr) + conf)
-    elif i.get('bald_regen'):
-        eta = i.get('minuten_bis_regen', 0)
-        parts.append(L['regen_in'].format(v=eta))
-    if not parts and fx60 > 0: parts.append(L['kein_alarm'].format(v=round(fx60,0)))
-    if not parts and rr > 0: parts.append(f'🌂 Regen: {rr}mm/h')
+        bestaetigt = ' ✓ TAWES' if 'TAWES' in rq else (' ✓ ZAMG' if 'ZAMG' in rq else '')
+        trend_pf   = ' ↑ zunehmend' if rtr == 'zunehmend' else (' ↓ nachlassend' if rtr == 'abnehmend' else '')
+        parts.append(f'🌧️ Regen jetzt: {rr}mm/h{bestaetigt}{trend_pf}')
+    elif eta_b >= 0:
+        bestaetigt = ' ✓ TAWES' if 'TAWES' in rq else ''
+        zuvl = f' | {kfz}% Konfidenz' if kfz >= 50 else ' | Prognose'
+        parts.append(f'🌧️ Regen in ~{eta_b}min{bestaetigt}{zuvl}')
+    # Fallback: kein Alarm, aber Böen messbar
+    if not parts and fx60 > 0:
+        parts.append(f'✅ Kein Alarm | Böen bis {round(fx60)}km/h | Niederschlag: {i.get("pt_name","–")}')
+    if not parts:
+        parts.append(f'✅ Ruhig | Wind: {round(i.get("ff_jetzt",0))}km/h | Kein Niederschlag')
     return ' | '.join(parts)
 
-def _notification_tawes(t):
-    """TAWES Status-Nachricht – immer gesendet, auch ohne Alarm (Loxone-Anzeige)."""
+def _notification_tawes(t, alarm=None):
+    """TAWES Messnetz-Nachricht – zeigt was die Umgebungsstationen JETZT messen."""
     if not t: return ''
+    al   = alarm or {}
+    eta_b= al.get('eta_min', -1)
+    rtr  = al.get('regen_trend', '')
+    wr   = t.get('dominante_windrichtung_name', '–')
+    n_up = t.get('upstream_aktiv', 0) or 0
     parts = []
+    # Wind
+    w_up  = t.get('wind_upstream_kmh', 0) or 0
     if t.get('sturm_upstream'):
-        parts.append(f'💨 Sturmböen upstream {t.get("wind_upstream_kmh",0)} km/h aus {t.get("dominante_windrichtung_name","?")}')
+        parts.append(f'💨 Sturmböen upstream: {w_up}km/h aus {wr} ({n_up} Stationen)')
     elif t.get('wind_kaskade'):
-        eta = t.get('wind_kaskade_eta_min', -1)
-        parts.append(f'💨 Sturmfront naht | ETA {eta}min' if eta > 0 else '💨 Sturmkaskade erkannt')
+        keta = t.get('wind_kaskade_eta_min', -1)
+        s = f'💨 Sturmfront aus {wr} nähert sich'
+        if keta > 0: s += f' | ETA ~{keta}min'
+        parts.append(s)
+    elif w_up > 0 and n_up > 0:
+        parts.append(f'💨 Wind upstream: {w_up}km/h aus {wr} ({n_up} Stationen)')
+    # Regen upstream
     up_mm = t.get('regen_upstream_mm', 0) or 0
     if up_mm > 0:
-        eta_r = t.get('regen_eta_min', -1)
-        wr    = t.get('dominante_windrichtung_name', '')
-        s = f'🌧️ Regen upstream {up_mm}mm/h'
-        s += (f' | ETA ~{eta_r}min' if eta_r > 0 else '')
-        if wr: s += f' aus {wr}'
+        s = f'🌧️ Regen upstream: {up_mm}mm/h aus {wr}'
+        if eta_b >= 0: s += f' | ETA ~{eta_b}min'
+        if rtr == 'zunehmend': s += ' ↑'
         parts.append(s)
     elif t.get('regen_lokal'):
-        lok = t.get('regen_lokal_station', '') or ''
+        lok    = t.get('regen_lokal_station', '') or ''
         lok_mm = t.get('regen_lokal_mm', 0) or 0
-        parts.append(f'🌧️ Regen lokal: {lok} {lok_mm}mm/h' if lok else '🌧️ Regen in der Nähe')
+        parts.append(f'🌧️ Lokal-Regen: {lok} – {lok_mm}mm/h' if lok else '🌧️ Regen in der Nähe')
+    # Fallback: Stationen aktiv, kein Signal
     if not parts:
-        w = t.get('wind_upstream_kmh', 0) or 0
-        wr = t.get('dominante_windrichtung_name', '')
-        n_up = t.get('upstream_aktiv', 0) or 0
-        if w > 0 and n_up > 0: parts.append(f'💨 Wind upstream: {w}km/h aus {wr} ({n_up} Stationen)')
+        n_ges = len(t.get('alle_stationen', []))
+        if n_ges > 0:
+            parts.append(f'✅ {n_ges} Stationen aktiv | Wind: {w_up}km/h aus {wr} | kein Alarm-Signal')
     return ' | '.join(parts)
 
 # ---------------------------------------------------------------------------
@@ -919,32 +1069,43 @@ def publish_all(status_msg, tawes=None, zamg=None, inca=None, alarm=None, prev=N
         a_ges = alarm.get('gesamt', 0); entw = alarm.get('entwarnung', 0)
         for k in ('gesamt','wind','regen','gewitter','hagel','schnee','stufe','entwarnung'):
             publish(f'alarm/{k}', alarm.get(k, 0))
-        for k in ('wind_quelle','regen_quelle','regen_konfidenz','zusammenfassung'):
+        # konfidenz: 0-100 Score aus Multi-Source-Fusion (ersetzt binäres regen_konfidenz)
+        publish('alarm/konfidenz',     alarm.get('konfidenz', 0))
+        publish('alarm/eta_min',       alarm.get('eta_min', -1))
+        publish('alarm/regen_trend',   alarm.get('regen_trend', 'unbekannt'))
+        for k in ('wind_quelle','regen_quelle','zusammenfassung'):
             publish(f'alarm/{k}', alarm.get(k, '–'))
 
-    # Notifications – notification/inca und notification/tawes IMMER senden
-    # (Loxone kann diese unabhängig vom Alarm-Level zur Anzeige nutzen)
+    # Notifications – inca und tawes IMMER senden (Loxone kann unabhängig anzeigen)
     notif_alle = ''
-    nt_inca  = _notification_inca(inca, alarm)   if inca  else ''
-    nt_tawes = _notification_tawes(tawes)         if tawes else ''
-    publish('notification/inca',  nt_inca  if nt_inca  else '')
-    publish('notification/tawes', nt_tawes if nt_tawes else '')
+    nt_inca  = _notification_inca(inca, alarm)    if inca  else ''
+    nt_tawes = _notification_tawes(tawes, alarm)  if tawes else ''
+    publish('notification/inca',  nt_inca  or '')
+    publish('notification/tawes', nt_tawes or '')
+
+    # Tageswarnung: ZAMG-Warnungen 0-8h in der Zukunft → Frühinfo für Morgenroutine
+    notif_tages = (zamg or {}).get('notification_tageswarnung', '')
+    publish('notification/tageswarnung', notif_tages)
 
     if a_ges >= 1:
-        # notification/alle: kombiniert alle aktiven Quellen
+        # notification/alle: reichhaltige Zusammenfassung aller aktiven Quellen
         alle = []
-        if zamg  and zamg.get('irgendwas_aktiv'): alle.append(zamg.get('notification_geosphere',''))
-        if inca  and ('INCA' in alarm.get('wind_quelle','') or 'INCA' in alarm.get('regen_quelle','')): alle.append(nt_inca)
+        if zamg and zamg.get('irgendwas_aktiv'):
+            alle.append(zamg.get('notification_geosphere',''))
+        if inca and ('INCA' in (alarm or {}).get('wind_quelle','') or 'INCA' in (alarm or {}).get('regen_quelle','')):
+            alle.append(nt_inca)
         if tawes and (tawes.get('sturm_upstream') or tawes.get('wind_kaskade') or
-                      (tawes.get('regen_upstream_mm',0) or 0) > 0 or tawes.get('regen_lokal')): alle.append(nt_tawes)
+                      (tawes.get('regen_upstream_mm',0) or 0) > 0 or tawes.get('regen_lokal')):
+            alle.append(nt_tawes)
         notif_alle = ' ── '.join(p for p in alle if p)
-        if not notif_alle: notif_alle = alarm.get('zusammenfassung', '')
+        if not notif_alle: notif_alle = (alarm or {}).get('zusammenfassung', '')
         publish('notification/alle', notif_alle)
     elif entw:
         notif_alle = L['entwarnung']
         publish('notification/alle', notif_alle)
     else:
-        publish('notification/alle', '')
+        # Kein Alarm: Tageswarnung weiterleiten wenn vorhanden, sonst leer
+        publish('notification/alle', notif_tages if notif_tages else '')
 
     # INCA: Felder heißen direkt fx_jetzt/ff_jetzt/rr_jetzt/pt_jetzt – keine Aliases nötig
     inca_st = {k: v for k, v in (inca or {}).items() if k != '_api_ok'}
@@ -961,7 +1122,7 @@ def publish_all(status_msg, tawes=None, zamg=None, inca=None, alarm=None, prev=N
     # State speichern
     save_state({
         'letztes_update': ts_iso, 'letzter_abruf_epoch': ts_epoch, 'status': status_msg,
-        # Top-Level: index.php liest $state['akutwarnung'] etc. direkt (nicht verschachtelt)
+        # Top-Level: index.php liest diese direkt (nicht verschachtelt)
         'akutwarnung':          (zamg or {}).get('akutwarnung', 0),
         'irgendwas_aktiv':      (zamg or {}).get('irgendwas_aktiv', 0),
         'max_stufe':            (zamg or {}).get('max_stufe', 0),
@@ -969,6 +1130,14 @@ def publish_all(status_msg, tawes=None, zamg=None, inca=None, alarm=None, prev=N
         'inca_letztes_update':  (inca or {}).get('letzter_abruf', ''),
         'tawes_letztes_update': (tawes or {}).get('letztes_update', ''),
         'notification_alle':    notif_alle,
+        'notification_tageswarnung': notif_tages,
+        # Trend-Snapshot für UI-Anzeige
+        'trend': {
+            'regen':     (alarm or {}).get('regen_trend', ''),
+            'eta_min':   (alarm or {}).get('eta_min', -1),
+            'konfidenz': (alarm or {}).get('konfidenz', 0),
+            'n_zyklen':  len(_TREND_HISTORY),
+        },
         # Verschachtelt
         'zamg':  {k: v for k, v in (zamg or {}).items() if k != '_api_ok'},
         'inca':  inca_st,
@@ -997,7 +1166,7 @@ def run():
         time.sleep(1)
     except Exception: pass
 
-    log.info(f'Unwetter4Lox v0.9.14 gestartet | Interval={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID} | Upstream-Winkel=±{TAWES_UPSTREAM_WINKEL}°')
+    log.info(f'Unwetter4Lox v0.9.15 gestartet | Interval={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID} | Upstream=±{TAWES_UPSTREAM_WINKEL}° | Trend-Engine aktiv')
     try:
         with open(PID_FILE, 'w') as f: f.write(str(my_pid))
     except: pass
@@ -1066,8 +1235,16 @@ def run():
                     elif status == 'OK': status = 'TAWES API Fehler'
                 except Exception: log.error(f'TAWES Fehler: {traceback.format_exc()}')
 
+            # Trend-Engine: aktuellen Zyklus einbuchen + Analyse
+            _add_trend(inca or None, tawes or None)
+            trend = _analyse_trend()
+            if len(_TREND_HISTORY) >= 3 and (trend.get('regen_trend') != 'unbekannt' or trend.get('wind_trend') != 'unbekannt'):
+                log.debug(f'Trend | Regen: {trend["regen_trend"]} (slope={trend["rr_slope"]}) '
+                          f'| Wind: {trend["wind_trend"]} (slope={trend["fx_slope"]}) '
+                          f'| ETA korr.: {trend["eta_korrigiert"]}min | Bonus: +{trend["konfidenz_bonus"]}')
+
             # Alarm aggregieren und publizieren
-            alarm = build_alarm(zamg or None, inca or None, tawes or None, prev_alarm)
+            alarm = build_alarm(zamg or None, inca or None, tawes or None, prev_alarm, trend=trend)
             publish_all(status, tawes or None, zamg or None, inca or None, alarm, prev_alarm)
             prev_alarm = alarm
             first = False
