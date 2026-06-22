@@ -1,4 +1,4 @@
-"""Unwetter4Lox Daemon v0.9.17 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
+"""Unwetter4Lox Daemon v0.9.18 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math, re, traceback, socket
 from datetime import datetime, timezone, timedelta
 from collections import deque
@@ -166,26 +166,44 @@ def _analyse_trend():
                 'konfidenz_bonus': 0, 'eta_korrigiert': -1, 'n_quellen_aktiv': 0,
                 'rr_slope': 0.0, 'fx_slope': 0.0, 'inca_trend_zyklen': 0}
 
-    # Gewichtete kombinierte Serien: INCA = direkt am Standort, TAWES = Upstream-Messung
-    rr_serie = [e['inca_rr'] * 1.0 + e['tawes_rr_up'] * 0.5 for e in h]
-    fx_serie = [max(e['inca_fx60'], e['tawes_fx_up'])         for e in h]
+    # Trend-Serien: INCA und TAWES GETRENNT – sie messen verschiedene Orte!
+    # rr_inca: Regen am Standort (INCA-Modell) – für Slope-Berechnung maßgeblich
+    # rr_tawes: Regen upstream (echte Messung) – als Bestätigung, nicht addiert
+    rr_inca  = [e['inca_rr']      for e in h]
+    rr_tawes = [e['tawes_rr_up']  for e in h]
+    fx_serie = [max(e['inca_fx60'], e['tawes_fx_up']) for e in h]
 
-    rr_slope = _linreg_slope(rr_serie)   # mm/h pro Zyklus
-    fx_slope = _linreg_slope(fx_serie)   # km/h pro Zyklus
+    rr_slope = _linreg_slope(rr_inca)   # Slope nur aus INCA (sauber, ein Ort)
+    fx_slope = _linreg_slope(fx_serie)
 
-    regen_trend = 'zunehmend' if rr_slope > 0.3 else ('abnehmend' if rr_slope < -0.3 else 'stabil')
-    wind_trend  = 'zunehmend' if fx_slope > 1.0 else ('abnehmend' if fx_slope < -1.0 else 'stabil')
+    # Beschleunigung: aktueller Slope (letzte 3 Zyklen) vs. Gesamtslope
+    # Wenn aktuell > 2× Gesamt → Storm intensiviert sich gerade
+    beschleunigt = False
+    if len(h) >= 4:
+        rr_slope_aktuell = _linreg_slope(rr_inca[-3:])
+        if rr_slope_aktuell > 0 and rr_slope > 0 and rr_slope_aktuell > rr_slope * 2.0:
+            beschleunigt = True
+        fx_slope_aktuell = _linreg_slope(fx_serie[-3:])
+        if fx_slope_aktuell > 0 and fx_slope > 0 and fx_slope_aktuell > fx_slope * 2.0:
+            beschleunigt = True
 
-    # Konsistenz: wie viele aufeinanderfolgende Schritte zeigen die gleiche Richtung?
-    n_cons_rr = sum(1 for i in range(1, len(h)) if (rr_serie[i] - rr_serie[i-1]) * rr_slope > 0)
+    regen_trend = ('stark_zunehmend' if beschleunigt and rr_slope > 0.1
+                   else ('zunehmend' if rr_slope > 0.3
+                   else ('abnehmend' if rr_slope < -0.3 else 'stabil')))
+    wind_trend  = ('stark_zunehmend' if beschleunigt and fx_slope > 0.5
+                   else ('zunehmend' if fx_slope > 1.0
+                   else ('abnehmend' if fx_slope < -1.0 else 'stabil')))
+
+    # Konsistenz: wie viele Schritte zeigen gleiche Richtung?
+    n_cons_rr = sum(1 for i in range(1, len(h)) if (rr_inca[i]  - rr_inca[i-1])  * rr_slope > 0)
     n_cons_fx = sum(1 for i in range(1, len(h)) if (fx_serie[i] - fx_serie[i-1]) * fx_slope > 0)
-    # Bonus: pro konsistenter Stufe +5 Punkte, max 25
-    konfidenz_bonus = min(25, max(n_cons_rr, n_cons_fx) * 5)
+    # Basis-Bonus aus Konsistenz + Extra-Bonus bei Beschleunigung
+    konfidenz_bonus = min(25, max(n_cons_rr, n_cons_fx) * 5 + (10 if beschleunigt else 0))
 
-    # Wie viele aufeinanderfolgende Zyklen zeigt INCA Regen-Signal?
+    # Zyklen-Zähler: eta > 0 (eta == 0 heißt Regen ist da → das ist rr_jetzt-Territorium)
     inca_trend_zyklen = 0
     for e in reversed(h):
-        if e['inca_rr'] >= REGEN_ALARM or e['inca_eta'] >= 0: inca_trend_zyklen += 1
+        if e['inca_rr'] >= REGEN_ALARM or e['inca_eta'] > 0: inca_trend_zyklen += 1
         else: break
 
     # ETA-Korrektur: lineare Extrapolation der INCA minuten_bis_regen-Serie
@@ -759,9 +777,11 @@ def fetch_inca():
                 if t_ts <= now.timestamp() + 3600 and v > m60r: m60r = v
             res['rr_max_30min'] = round(m30r, 2)
             res['rr_max_60min'] = round(m60r, 2)
-            # Erster Zeitschritt mit Regen → ETA und bald_regen
+            # Erster Zeitschritt mit signifikantem Regen → ETA und bald_regen
+            # Schwelle: 25% von REGEN_ALARM – filtert Modellrauschen (<0.01mm/h Artefakte)
+            _eta_threshold = REGEN_ALARM * 0.25
             for i, ts in enumerate(ts_list[:n_steps]):
-                if i < len(serie) and serie[i] > 0.0:
+                if i < len(serie) and serie[i] >= _eta_threshold:
                     t_ts = _parse_iso(ts)
                     dt = max(0, int((t_ts - now.timestamp()) / 60))
                     res['minuten_bis_regen'] = dt; res['bald_regen'] = int(dt <= 30)
@@ -929,7 +949,8 @@ def build_alarm(zamg, inca, tawes, prev_alarm, trend=None):
         rp = f'🌧️ {R_TXT[min(a_r,3)]} (Stufe {a_r}/3)'
         if eta_best > 0:   rp += f' – Ankunft in ~{eta_best} min'
         elif eta_best == 0: rp += ' – Regen jetzt vor Ort'
-        if regen_trend == 'zunehmend': rp += ', nimmt zu'
+        if regen_trend == 'stark_zunehmend': rp += ', intensiviert sich rasch'
+        elif regen_trend == 'zunehmend': rp += ', nimmt zu'
         elif regen_trend == 'abnehmend': rp += ', lässt nach'
         parts.append(rp)
     if a_g > 0: parts.append(f'⚡ Gewitterwarnung (Stufe {a_g}/3)')
@@ -968,7 +989,9 @@ def _notification_inca(i, alarm=None):
     # Regen
     if rr >= REGEN_ALARM:
         best  = ' – durch Wetterstationen bestätigt' if 'TAWES' in rq else (' – laut offizieller Warnung' if 'ZAMG' in rq else '')
-        trend = ', Intensität nimmt zu' if rtr == 'zunehmend' else (', lässt nach' if rtr == 'abnehmend' else '')
+        trend = (', intensiviert sich rasch' if rtr == 'stark_zunehmend'
+                 else (', Intensität nimmt zu' if rtr == 'zunehmend'
+                 else (', lässt nach' if rtr == 'abnehmend' else '')))
         parts.append(f'🌧️ Regen vor Ort: {rr} mm/h{best}{trend}')
     elif eta_b > 0:
         best = ' – durch Wetterstationen bestätigt' if 'TAWES' in rq else ''
@@ -1009,7 +1032,8 @@ def _notification_tawes(t, alarm=None):
     if up_mm > 0:
         s = f'🌧️ Regen aus {wr} nähert sich – {up_mm} mm/h gemessen'
         if eta_b > 0: s += f', Ankunft in ~{eta_b} Minuten'
-        if rtr == 'zunehmend': s += ', Intensität nimmt zu'
+        if rtr == 'stark_zunehmend': s += ', intensiviert sich rasch'
+        elif rtr == 'zunehmend': s += ', Intensität nimmt zu'
         parts.append(s)
     elif t.get('regen_lokal'):
         lok    = t.get('regen_lokal_station', '') or ''
@@ -1199,7 +1223,7 @@ def run():
         time.sleep(1)
     except Exception: pass
 
-    log.info(f'Unwetter4Lox v0.9.17 gestartet | Interval={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID} | Upstream=±{TAWES_UPSTREAM_WINKEL}° | Trend-Engine aktiv')
+    log.info(f'Unwetter4Lox v0.9.18 gestartet | Interval={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID} | Upstream=±{TAWES_UPSTREAM_WINKEL}° | Trend-Engine aktiv')
     try:
         with open(PID_FILE, 'w') as f: f.write(str(my_pid))
     except: pass
