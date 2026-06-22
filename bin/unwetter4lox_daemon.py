@@ -1,4 +1,4 @@
-"""Unwetter4Lox Daemon v0.9.18 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
+"""Unwetter4Lox Daemon v0.9.19 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math, re, traceback, socket
 from datetime import datetime, timezone, timedelta
 from collections import deque
@@ -628,9 +628,25 @@ def correlate_tawes(initial_history=False):
             best = max(lok_a, key=lambda s: s.get('RR') or 0); r_lok_mm = round((best.get('RR') or 0)*6, 1)
             r_lok_st = f'{best["name"]} ({best["dist_km"]:.0f}km) {r_lok_mm}mm/h'
 
+    # Physik-ETA: nächste Upstream-Station mit Regen + Windgeschwindigkeit → Reisezeit
+    # Regenfront bewegt sich in Windrichtung mit ~Windgeschwindigkeit.
+    # Formel: eta_min = dist_km / (wind_kmh / 60) → Minuten bis Ankunft
+    eta_physik = -1
+    eta_physik_station = ''
+    if w_up_kmh >= 5 and reg_up:
+        up_mit_regen = sorted(
+            [s for s in upstream if (s.get('RR') or 0) > 0.1],
+            key=lambda s: s['dist_km']
+        )
+        if up_mit_regen:
+            naechste = up_mit_regen[0]
+            eta_physik = max(0, round(naechste['dist_km'] / (w_up_kmh / 60)))
+            eta_physik_station = f'{naechste["name"]} ({naechste["dist_km"]:.0f}km)'
+
     ns = upstream[0] if upstream else (nearby[0] if nearby else None)
     n_mit_daten = sum(1 for s in all_st if s.get('FF_kmh') is not None or s.get('FFX_kmh') is not None or s.get('RR') is not None)
-    log.info(f'TAWES OK | {n_mit_daten}/{len(nearby)} Stationen aktiv | upstream={len(upstream)} (±{TAWES_UPSTREAM_WINKEL}° von {dom_wr_name}) | wind_up={w_up_kmh}km/h | regen_up={reg_up}')
+    eta_log = f' | eta_physik={eta_physik}min ({eta_physik_station})' if eta_physik >= 0 else ''
+    log.info(f'TAWES OK | {n_mit_daten}/{len(nearby)} Stationen aktiv | upstream={len(upstream)} (±{TAWES_UPSTREAM_WINKEL}° von {dom_wr_name}) | wind_up={w_up_kmh}km/h | regen_up={reg_up}{eta_log}')
     if n_mit_daten < len(nearby) // 2:
         offline = [s['name'] for s in all_st if s.get('FF_kmh') is None and s.get('FFX_kmh') is None and s.get('RR') is None]
         log.debug(f'TAWES: {len(offline)} Stationen ohne aktuelle Messwerte: {", ".join(offline[:10])}{"..." if len(offline)>10 else ""}')
@@ -641,6 +657,7 @@ def correlate_tawes(initial_history=False):
         'upstream_aktiv': len(upstream), 'regen_lokal': r_lok, 'regen_lokal_mm': r_lok_mm, 'regen_lokal_station': r_lok_st,
         'alpine_upstream': alp_cnt, 'naechste_station_name': ns['name'] if ns else '–',
         'naechste_station_km': ns['dist_km'] if ns else 0, 'naechste_station_richtung': ns.get('bearing_name', '–') if ns else '–',
+        'eta_physik_min': eta_physik, 'eta_physik_station': eta_physik_station,
         'alle_stationen': all_st, '_api_ok': True,
     }
 
@@ -837,10 +854,13 @@ def build_alarm(zamg, inca, tawes, prev_alarm, trend=None):
     z = zamg or {}; i = inca or {}; t = tawes or {}
     tr = trend or {}
 
-    trend_bonus   = tr.get('konfidenz_bonus', 0)    # 0-25 aus Trend-Engine
-    inca_zyklen   = tr.get('inca_trend_zyklen', 0)  # wie lange INCA schon Signal hat
+    trend_bonus   = tr.get('konfidenz_bonus', 0)
+    inca_zyklen   = tr.get('inca_trend_zyklen', 0)
     regen_trend   = tr.get('regen_trend', 'unbekannt')
-    eta_korr      = tr.get('eta_korrigiert', -1)    # extrapolierter ETA aus Zeitreihe
+    eta_korr      = tr.get('eta_korrigiert', -1)
+
+    # Physik-ETA aus TAWES: Entfernung der nächsten Upstream-Station mit Regen ÷ Windgeschwindigkeit
+    eta_physik    = t.get('eta_physik_min', -1)
 
     # === REGEN ===
     a_r = 0; rq = '–'; conf_r = 0
@@ -848,35 +868,35 @@ def build_alarm(zamg, inca, tawes, prev_alarm, trend=None):
     if zr: a_r = max(a_r, zr); rq = 'ZAMG'; conf_r = max(conf_r, 40)
 
     rr       = i.get('rr_jetzt', 0) or 0
-    rr_max30 = i.get('rr_max_30min', 0) or 0   # INCA-Spitzenwert nächste 30 min
+    rr_max30 = i.get('rr_max_30min', 0) or 0
     eta      = i.get('minuten_bis_regen', -1)
-    # ir_raw: gibt es überhaupt ein INCA-Signal? (aktueller Regen ODER Regen kommt in >0 min)
     ir_raw   = _mm_al(rr) or (1 if eta > 0 else 0)
     tawes_regen = bool(t.get('regen_upstream', 0) or t.get('regen_lokal', 0))
     up_mm    = t.get('regen_upstream_mm', 0) or 0
     lok_mm   = t.get('regen_lokal_mm', 0) or 0
 
+    # Physik-ETA Konfidenz: INCA-Modell und TAWES-Reisezeit stimmen überein?
+    # Übereinstimmung innerhalb 10 Min = starke gegenseitige Bestätigung → +15 Konfidenzpunkte
+    eta_physik_bonus = 0
+    if eta > 0 and eta_physik >= 0 and abs(eta - eta_physik) <= 10:
+        eta_physik_bonus = 15
+
     if ir_raw:
-        conf_r += 30  # INCA Signal
-        # rr_peak: Spitzenwert für die Stufen-Berechnung (immer durch _mm_al → Schwelle bleibt Limit)
+        conf_r += 30
         rr_peak = max(rr, rr_max30)
         if tawes_regen or zr:
-            # INCA + TAWES/ZAMG bestätigt → Stufe aus 30-min Spitzenwert (volle Skala 1-3)
-            # Minimum Stufe 1 weil Signal + Bestätigung vorliegt
             ir  = max(_mm_al(rr_peak), 1)
             rq  = f'INCA+TAWES ({rr}→{rr_peak}mm/h)' if tawes_regen else f'INCA+ZAMG ({rr}→{rr_peak}mm/h)'
         elif inca_zyklen >= 4:
-            # INCA-Trend ≥4 Zyklen: Spitzenwert erlaubt, aber max Stufe 2 (kein Ground-Truth)
             ir  = min(2, max(_mm_al(rr_peak), 1))
             rq  = f'INCA ({rr}→{rr_peak}mm/h, {inca_zyklen} Zyklen)'
         else:
-            # INCA allein ohne Trendbestätigung: konservativ, nur rr_jetzt, max Stufe 1
             ir  = min(1, _mm_al(rr)) if rr >= REGEN_ALARM else (1 if eta > 0 else 0)
             rq  = f'INCA ({rr}mm/h)' if rr > 0 else f'INCA (Regen ~{eta}min)'
         a_r = max(a_r, ir)
 
     if tawes_regen:
-        conf_r += 20  # TAWES Signal
+        conf_r += 20
     # TAWES upstream: Stufe aus gemessenen mm/h → immer durch _mm_al (Schwelle gilt)
     # Ohne INCA-Signal: max Stufe 1 (single-source Messung)
     if up_mm >= REGEN_ALARM:
@@ -889,7 +909,7 @@ def build_alarm(zamg, inca, tawes, prev_alarm, trend=None):
         if rq == '–': rq = f'TAWES_LOK ({t.get("regen_lokal_station","")}) {lok_mm}mm/h'
 
     # Trend-Bonus auf Konfidenz, limitiert auf max Level
-    conf_r = min(100, conf_r + trend_bonus)
+    conf_r = min(100, conf_r + trend_bonus + eta_physik_bonus)
 
     # === WIND ===
     a_w = 0; wq = '–'; conf_w = 0
@@ -933,8 +953,20 @@ def build_alarm(zamg, inca, tawes, prev_alarm, trend=None):
     prev_g = int((prev_alarm or {}).get('gesamt', 0))
     entw = int(prev_g >= 1 and a_ges == 0)
 
-    # ETA: priorisiere korrigierte Trendextrapolation über INCA-Rohwert
-    eta_best = eta_korr if eta_korr >= 0 else (eta if eta >= 0 else -1)
+    # ETA-Auswahl: Reihenfolge der Verlässlichkeit
+    # 1. Trendkorrigierter INCA-ETA (Extrapolation der Zeitreihe)
+    # 2. Physik-ETA aus TAWES Reisezeit (wenn INCA und Physik sich einig sind → nimm den früheren)
+    # 3. INCA-Rohwert
+    if eta_korr >= 0 and eta_physik >= 0 and eta_physik_bonus > 0:
+        # Beide Quellen aktiv und sie stimmen überein → früherer Wert = konservativer
+        eta_best = min(eta_korr, eta_physik)
+    elif eta_korr >= 0:
+        eta_best = eta_korr
+    elif eta_physik >= 0 and tawes_regen:
+        # Kein INCA-Trend, aber Physik-ETA aus bestätigtem TAWES-Regen
+        eta_best = eta_physik
+    else:
+        eta_best = eta if eta >= 0 else -1
 
     # Zusammenfassung als lesbarer Klartext (für notification/alle und alarm/zusammenfassung)
     W_TXT = ['', 'Windwarnung', 'Sturmwarnung', 'Extremsturm']
@@ -1223,7 +1255,7 @@ def run():
         time.sleep(1)
     except Exception: pass
 
-    log.info(f'Unwetter4Lox v0.9.18 gestartet | Interval={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID} | Upstream=±{TAWES_UPSTREAM_WINKEL}° | Trend-Engine aktiv')
+    log.info(f'Unwetter4Lox v0.9.19 gestartet | Interval={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID} | Upstream=±{TAWES_UPSTREAM_WINKEL}° | Trend-Engine aktiv')
     try:
         with open(PID_FILE, 'w') as f: f.write(str(my_pid))
     except: pass
