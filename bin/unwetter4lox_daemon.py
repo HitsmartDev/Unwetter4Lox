@@ -1,4 +1,4 @@
-"""Unwetter4Lox Daemon v0.9.16 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
+"""Unwetter4Lox Daemon v0.9.17 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math, re, traceback, socket
 from datetime import datetime, timezone, timedelta
 from collections import deque
@@ -696,7 +696,8 @@ def fetch_inca():
     n_steps = max(1, INCA_HORIZON // 15)
     res = dict(
         ff_jetzt=0.0, fx_jetzt=0.0, fx_max_30min=0.0, fx_max_60min=0.0,
-        rr_jetzt=0.0, pt_jetzt=255, pt_name=L['pt_none'],
+        rr_jetzt=0.0, rr_max_30min=0.0, rr_max_60min=0.0,
+        pt_jetzt=255, pt_name=L['pt_none'],
         pt_bald=255, pt_bald_name='',
         bald_regen=0, bald_hagel=0, bald_graupel=0,
         bald_sturm_30=0, bald_sturm_60=0, minuten_bis_regen=-1, regen_alarm=0,
@@ -749,10 +750,20 @@ def fetch_inca():
             serie = [round(float(v), 2) if v is not None else 0.0 for v in values[:n_steps]]
             res['rr_jetzt'] = serie[0] if serie else 0.0
             res['regen_alarm'] = int(res['rr_jetzt'] >= REGEN_ALARM)
+            # Spitzenwerte der nächsten 30/60 min – gleiche Logik wie fx_max_30/60min
+            m30r = m60r = 0.0
+            for j, ts in enumerate(ts_list[:n_steps]):
+                if j >= len(serie): break
+                v = serie[j]; t_ts = _parse_iso(ts)
+                if t_ts <= now.timestamp() + 1800 and v > m30r: m30r = v
+                if t_ts <= now.timestamp() + 3600 and v > m60r: m60r = v
+            res['rr_max_30min'] = round(m30r, 2)
+            res['rr_max_60min'] = round(m60r, 2)
+            # Erster Zeitschritt mit Regen → ETA und bald_regen
             for i, ts in enumerate(ts_list[:n_steps]):
                 if i < len(serie) and serie[i] > 0.0:
-                    t = _parse_iso(ts)  # int Unix-Timestamp
-                    dt = max(0, int((t - now.timestamp()) / 60))
+                    t_ts = _parse_iso(ts)
+                    dt = max(0, int((t_ts - now.timestamp()) / 60))
                     res['minuten_bis_regen'] = dt; res['bald_regen'] = int(dt <= 30)
                     res['_regen_idx'] = i
                     break
@@ -775,7 +786,9 @@ def fetch_inca():
     if _fehler:
         log.warning(f'INCA: {len(_fehler)}/4 Parameter fehlgeschlagen ({", ".join(_fehler)}) – Teildaten verwendet')
     fx60 = res['fx_max_60min']
-    log.info(f'INCA OK | Böen {fx60} km/h | Regen {res["rr_jetzt"]} mm/h | ETA {res["minuten_bis_regen"]}min | PT={res["pt_name"]}')
+    rr_peak_log = res['rr_max_30min']
+    peak_hint = f' (max30: {rr_peak_log})' if rr_peak_log > res['rr_jetzt'] else ''
+    log.info(f'INCA OK | Böen {fx60} km/h | Regen {res["rr_jetzt"]}{peak_hint} mm/h | ETA {res["minuten_bis_regen"]}min | PT={res["pt_name"]}')
     res.pop('_regen_idx', None)
     res['letzter_abruf'] = datetime.now().astimezone().strftime('%d.%m.%Y %H:%M:%S')
     res['_api_ok'] = True
@@ -814,36 +827,45 @@ def build_alarm(zamg, inca, tawes, prev_alarm, trend=None):
     zr = _stufe_al(z.get('regen',{}).get('stufe',0))
     if zr: a_r = max(a_r, zr); rq = 'ZAMG'; conf_r = max(conf_r, 40)
 
-    rr      = i.get('rr_jetzt', 0) or 0
-    eta     = i.get('minuten_bis_regen', -1)
-    ir_raw  = _mm_al(rr) or (1 if eta > 0 else 0)   # ETA > 0 = Regen kommt; ETA=0 = Regen da → nur rr_jetzt entscheidet
-    tawes_regen  = bool(t.get('regen_upstream', 0) or t.get('regen_lokal', 0))
-    up_mm   = t.get('regen_upstream_mm', 0) or 0
-    lok_mm  = t.get('regen_lokal_mm', 0) or 0
+    rr       = i.get('rr_jetzt', 0) or 0
+    rr_max30 = i.get('rr_max_30min', 0) or 0   # INCA-Spitzenwert nächste 30 min
+    eta      = i.get('minuten_bis_regen', -1)
+    # ir_raw: gibt es überhaupt ein INCA-Signal? (aktueller Regen ODER Regen kommt in >0 min)
+    ir_raw   = _mm_al(rr) or (1 if eta > 0 else 0)
+    tawes_regen = bool(t.get('regen_upstream', 0) or t.get('regen_lokal', 0))
+    up_mm    = t.get('regen_upstream_mm', 0) or 0
+    lok_mm   = t.get('regen_lokal_mm', 0) or 0
 
     if ir_raw:
         conf_r += 30  # INCA Signal
+        # rr_peak: Spitzenwert für die Stufen-Berechnung (immer durch _mm_al → Schwelle bleibt Limit)
+        rr_peak = max(rr, rr_max30)
         if tawes_regen or zr:
-            # INCA + TAWES/ZAMG: voller Level
-            ir = max(_mm_al(rr), 1); rq = f'INCA+TAWES ({rr}mm/h)' if tawes_regen else f'INCA+ZAMG ({rr}mm/h)'
+            # INCA + TAWES/ZAMG bestätigt → Stufe aus 30-min Spitzenwert (volle Skala 1-3)
+            # Minimum Stufe 1 weil Signal + Bestätigung vorliegt
+            ir  = max(_mm_al(rr_peak), 1)
+            rq  = f'INCA+TAWES ({rr}→{rr_peak}mm/h)' if tawes_regen else f'INCA+ZAMG ({rr}→{rr_peak}mm/h)'
         elif inca_zyklen >= 4:
-            # INCA allein, aber Trend seit ≥4 Zyklen bestätigt → bis Level 2 erlaubt
-            ir = min(2, max(_mm_al(rr), 1))
-            rq = f'INCA ({rr}mm/h, Trend {inca_zyklen} Zyklen)'
+            # INCA-Trend ≥4 Zyklen: Spitzenwert erlaubt, aber max Stufe 2 (kein Ground-Truth)
+            ir  = min(2, max(_mm_al(rr_peak), 1))
+            rq  = f'INCA ({rr}→{rr_peak}mm/h, {inca_zyklen} Zyklen)'
         else:
-            # INCA allein ohne Trend → max Level 1
-            ir = min(1, max(_mm_al(rr), int(eta >= 0)))
-            rq = f'INCA ({rr}mm/h)' if rr > 0 else f'INCA (Regen ~{eta}min)'
+            # INCA allein ohne Trendbestätigung: konservativ, nur rr_jetzt, max Stufe 1
+            ir  = min(1, _mm_al(rr)) if rr >= REGEN_ALARM else (1 if eta > 0 else 0)
+            rq  = f'INCA ({rr}mm/h)' if rr > 0 else f'INCA (Regen ~{eta}min)'
         a_r = max(a_r, ir)
 
     if tawes_regen:
         conf_r += 20  # TAWES Signal
-    if up_mm > 0 and _mm_al(up_mm):
+    # TAWES upstream: Stufe aus gemessenen mm/h → immer durch _mm_al (Schwelle gilt)
+    # Ohne INCA-Signal: max Stufe 1 (single-source Messung)
+    if up_mm >= REGEN_ALARM:
         tr_lvl = _mm_al(up_mm) if ir_raw else min(1, _mm_al(up_mm))
         a_r = max(a_r, tr_lvl)
         if rq == '–': rq = f'TAWES_UP ({up_mm}mm/h)'
-    if lok_mm > 0 and _mm_al(lok_mm):
-        a_r = max(a_r, min(1, _mm_al(lok_mm)))
+    # TAWES lokal: immer max Stufe 1 (nur Lokal-Station, kein Upstream-Konsens)
+    if lok_mm >= REGEN_ALARM:
+        a_r = max(a_r, 1)
         if rq == '–': rq = f'TAWES_LOK ({t.get("regen_lokal_station","")}) {lok_mm}mm/h'
 
     # Trend-Bonus auf Konfidenz, limitiert auf max Level
@@ -1177,7 +1199,7 @@ def run():
         time.sleep(1)
     except Exception: pass
 
-    log.info(f'Unwetter4Lox v0.9.16 gestartet | Interval={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID} | Upstream=±{TAWES_UPSTREAM_WINKEL}° | Trend-Engine aktiv')
+    log.info(f'Unwetter4Lox v0.9.17 gestartet | Interval={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID} | Upstream=±{TAWES_UPSTREAM_WINKEL}° | Trend-Engine aktiv')
     try:
         with open(PID_FILE, 'w') as f: f.write(str(my_pid))
     except: pass
