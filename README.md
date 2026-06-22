@@ -1,28 +1,28 @@
-# Unwetter4Lox v0.9.9
+# Unwetter4Lox
 
 **LoxBerry-Plugin für automatische Unwettererkennung und Wetterautomatisierung.**
 
-Unwetter4Lox kombiniert drei offizielle österreichische Wetterdatenquellen der GeoSphere Austria zu einem einheitlichen Alarmstatus und liefert alle Daten via MQTT an deinen Loxone Miniserver. Das Plugin erkennt Gewitter, Sturm, Starkregen, Hagel und Schnee – sowohl aus offiziellen Warnungen als auch aus Echtzeitmessdaten und Kurzvorhersagen.
+Unwetter4Lox kombiniert drei offizielle österreichische Wetterdatenquellen der GeoSphere Austria und berechnet daraus einen einheitlichen Alarmstatus mit bis zu 30 Minuten Vorlaufzeit. Alle Daten werden via MQTT an den Loxone Miniserver geliefert – ein einziger Wert pro Kategorie reicht für zuverlässige Automatisierungen.
 
 ---
 
 ## Was macht dieses Plugin?
 
-Das Plugin läuft als Hintergrunddienst (Daemon) auf deinem LoxBerry und fragt automatisch drei Datenquellen ab:
+Das Plugin läuft als Hintergrunddienst auf dem LoxBerry und fragt automatisch drei Datenquellen ab:
 
-1. **Offizielle ZAMG-Warnungen** – Behördliche Wetterwarnungen für deinen genauen Standort
-2. **INCA Nowcast** – Hochauflösende 15-Minuten-Vorhersage für die nächste Stunde
-3. **TAWES 360°** – Echtzeitmessungen von Wetterstationen in deiner Umgebung (Konsens, ETA, Wind-Kaskade, Lokal-Regen)
+1. **Offizielle ZAMG-Warnungen** – Amtliche Wetterwarnungen der GeoSphere Austria für deinen exakten Standort
+2. **INCA Nowcast** – Hochauflösende Kurzvorhersage (1 km², 15-Minuten-Schritte, bis 60 Minuten voraus)
+3. **TAWES 360°** – Echtzeitmessungen von Wetterstationen in der Umgebung (bis 120 km)
 
-Alle drei Quellen werden automatisch zu einem **aggregierten Gesamtstatus** zusammengefasst (die `alarm/`-Topics), damit du in Loxone nicht drei verschiedene Werte auswerten musst – ein einziger Wert pro Kategorie reicht für deine Automatisierungen.
+Alle drei Quellen werden intelligent zu einem **aggregierten Gesamtstatus** zusammengefasst. Die `alarm/`-Topics enthalten immer den besten verfügbaren Wert – du musst in Loxone nicht drei verschiedene Quellen auswerten.
 
 ---
 
 ## Datenquellen im Detail
 
-### 1. GeoSphere Austria – Offizielle Warnungen
+### 1. GeoSphere Austria – Offizielle Warnungen (ZAMG)
 
-Behördliche Warnungen des österreichischen Wetterdienstes, nach Standort gefiltert. Das Plugin prüft 8 Wettertypen:
+Amtliche Warnungen des österreichischen Wetterdienstes, nach GPS-Koordinaten gefiltert. Das Plugin prüft 8 Wettertypen:
 
 | Typ | Beschreibung |
 |:----|:-------------|
@@ -35,145 +35,277 @@ Behördliche Warnungen des österreichischen Wetterdienstes, nach Standort gefil
 | `hitze` | Hitzewelle |
 | `kaelte` | Kälteeinbruch, Frost |
 
-**Warnstufen:** 1 = Gelb (Vorsicht), 2 = Orange (Warnung), 3 = Rot (erhebliche Gefahr), 4 = Lila (Extrem)
+**Warnstufen:** Gelb = 1 (Vorsicht), Orange = 2 (Warnung), Rot = 3 (erhebliche Gefahr), Lila = 3 (Extrem)
+
+ZAMG-Warnungen werden direkt als Alarmstufe übernommen – ohne Schwellwertprüfung. Das Plugin zeigt außerdem ZAMG-Warnungen die in den nächsten 8 Stunden beginnen als Tageswarnung (`notification/tageswarnung`), damit Morgenroutinen in Loxone bereits früh über bevorstehende Unwetter informiert werden.
 
 ### 2. INCA Nowcast
 
 Hochauflösende Kurzvorhersage (1 km²) für deinen GPS-Punkt, aktualisiert alle 15 Minuten:
-- Böenstärke jetzt und in den nächsten 30/60 Minuten
-- Aktuelle Regenrate (mm/h) und Niederschlagstyp (Regen/Schnee/Hagel/Graupel)
-- Hagelgefahr in den nächsten 60 Minuten
-- Minuten bis zum nächsten Regen
 
-`inca/bald_regen` löst **keinen** `alarm/regen`-Alarm aus – nur wenn `rr_jetzt ≥ REGEN_ALARM`. So lässt sich `bald_regen` gezielt für Bewässerungssteuerung ohne Fehlalarme nutzen.
+- Böenstärke jetzt und Spitzenwerte in den nächsten 30/60 Minuten
+- Aktuelle Regenrate (mm/h) und maximale Intensität in den nächsten 30 Minuten
+- Niederschlagstyp (Regen, Schnee, Hagel, Graupel)
+- Hagelgefahr in den nächsten 60 Minuten
+- Minuten bis zum nächsten signifikanten Regen (ab 25% der Alarmschwelle, gefiltert von Modellrauschen)
+
+INCA allein hat **beschränkte Vertrauensstufe** – ohne Bestätigung durch TAWES oder ZAMG löst es maximal Alarmstufe 1 aus. Erst bei Bestätigung durch eine zweite Quelle sind alle Stufen möglich.
 
 ### 3. TAWES 360° – Wetterstationsnetz
 
-Das Plugin fragt alle TAWES-Stationen im einstellbaren Umkreis ab (Standard: 120 km, max. 25 Stationen) und wertet deren Echtzeitmessungen aus:
+Das Plugin fragt alle TAWES-Stationen im einstellbaren Umkreis (Standard: 120 km, max. 25 Stationen) ab und wertet deren Echtzeitmessungen aus:
 
-- **Upstream-Erkennung:** Welche Stationen liegen in der Windrichtung (±70°, vektorgewichtet)? Das Wetter kommt von dort.
-- **Wind-Konsens:** Mindestens 30 % der Upstream-Tal-Stationen (absolut mind. 2) müssen Böen ≥ BOEN_ALARM melden. Eine einzelne Station löst **nie** `alarm/wind` aus. Alpine Stationen (> konfigurierter Seehöhe, Standard: 1200 m) werden im Log angezeigt, fließen aber nicht in den Konsens ein.
-- **Wind-Kaskade:** Erkennt wenn Upstream-Stationen zeitlich gestaffelt Böen melden (weiter weg zuerst → dann näher). Gibt `alarm/wind=1` als Vorwarnung – auch ohne Konsens-Bestätigung. Nur Böen der letzten 60 Minuten werden berücksichtigt.
-- **Regen-ETA:** Wenn Upstream-Stationen Regen melden (nur letzten 30 Min im Buffer), wird die Frontgeschwindigkeit berechnet → ETA in Minuten.
-- **Lokal-Regen:** Regnet es jetzt innerhalb des konfigurierten Lokal-Umkreises (Standard: 25 km)? Unabhängig von der Windrichtung. Erkennt Regen auch wenn die Front nicht aus der Windrichtung kommt.
-- **Gewittersignal:** Druckabfall + hohe Luftfeuchtigkeit → Level 1. Zusätzlich starker Böenanstieg → Level 2 (Akut).
-- **Wind-Trend:** Lineare Regression über 60 Minuten – zeigt ob Böen zu- oder abnehmen.
+- **Upstream-Erkennung:** Welche Stationen liegen in der Windrichtung (konfigurierbarer Halbwinkel, Standard ±45°)? Das Wetter kommt von dort.
+- **Wind-Konsens:** Mindestens 30% der Upstream-Tal-Stationen (absolut mind. 2) müssen Böen ≥ BOEN_ALARM melden. Eine einzelne Station löst nie `alarm/wind` aus. Alpine Stationen (> konfigurierte Seehöhe) werden ausgeschlossen.
+- **Wind-Kaskade:** Erkennt zeitlich gestaffelte Böen upstream (Station weit weg zuerst, dann näher). Gibt Stufe 1 als Vorwarnung – auch ohne Konsens-Bestätigung.
+- **Regen upstream:** Wenn Upstream-Stationen Regen melden (nur letzte 30 Min.), bestätigt das den INCA-Nowcast.
+- **Physik-ETA:** Entfernung der nächsten Upstream-Station mit Regen geteilt durch Windgeschwindigkeit = physikalische Ankunftszeit. Vollständig unabhängig vom INCA-Modell.
+- **Lokal-Regen:** Regen innerhalb des konfigurierten Lokal-Umkreises (Standard: 25 km), unabhängig von der Windrichtung.
 
 ---
 
-## Alarmstufen – Prinzip
+## Wie werden Alarmstufen bestimmt?
 
-Alle `alarm/`-Topics verwenden **einheitliche Level** mit gleicher Bedeutung über alle Kategorien:
+### Die Grundregel: Vertrauen durch Bestätigung
 
-| Level | Bedeutung | Empfehlung |
-|:-----:|:----------|:-----------|
+Jede Datenquelle hat eine unterschiedliche Vertrauensstufe. Erst wenn mehrere Quellen dasselbe sagen, werden höhere Alarmstufen ausgelöst.
+
+| Quelle | Allein | Mit Bestätigung |
+|:-------|:-------|:----------------|
+| **ZAMG** | Stufe 1–3 direkt | – (amtliche Warnung, kein Konsens nötig) |
+| **INCA** | Max. Stufe 1 | + TAWES oder ZAMG → Stufe 1–3 |
+| **TAWES** | Max. Stufe 1 | + INCA → Stufe 1–3 |
+
+**Besonderheit:** Wenn INCA seit mindestens 4 aufeinanderfolgenden Zyklen (~20 Minuten) konstant ein Signal zeigt, ist max. Stufe 2 auch ohne TAWES-Bestätigung möglich. Dies erkennt anhaltende Ereignisse bevor TAWES-Stationen upstream reagieren.
+
+### Alarmstufen und Schwellwerte
+
+Die konfigurierten Schwellwerte (REGEN_ALARM, BOEN_ALARM) sind die **einzige** Grenze zwischen den Stufen. Kein anderer Wert bestimmt ob Stufe 1, 2 oder 3 ausgelöst wird:
+
+| Schwellwert | Stufe 1 | Stufe 2 | Stufe 3 |
+|:------------|:-------:|:-------:|:-------:|
+| `REGEN_ALARM` (Standard 10 mm/h) | ≥ 1× | ≥ 2× | ≥ 3× |
+| `BOEN_ALARM` (Standard 60 km/h) | ≥ 1× | ≥ 2× | ≥ 3× |
+
+### Vorlaufzeit: Stufe aus Vorhersage, nicht nur Istwert
+
+Das Plugin berechnet bei bestätigten Ereignissen (INCA + TAWES) die Alarmstufe aus dem **Spitzenwert der nächsten 30 Minuten**, nicht nur aus dem aktuellen Messwert. Wenn INCA jetzt 0.5 mm/h zeigt, aber in 15 Minuten 8 mm/h vorhersagt, und TAWES-Stationen upstream bereits Regen messen – dann ist der Alarm jetzt Stufe 3, mit 15 Minuten Vorlaufzeit.
+
+Wind verhält sich genauso: `fx_max_60min` (Maximum der nächsten 60 Minuten) bestimmt die Stufe.
+
+### Drei unabhängige ETA-Quellen
+
+Das Plugin berechnet die Ankunftszeit (ETA) aus drei unabhängigen Quellen und wählt intelligent:
+
+1. **INCA-Modell-ETA** – `minuten_bis_regen` aus dem Nowcast-Modell
+2. **Trend-ETA** – Extrapolation aus dem zeitlichen Verlauf der letzten ~40 Minuten
+3. **Physik-ETA** – Entfernung der nächsten upstream Regenstation ÷ Windgeschwindigkeit
+
+Wenn INCA-Modell und Physik-ETA innerhalb von 10 Minuten übereinstimmen, erhöht das die Konfidenz um +15 Punkte. Bei Übereinstimmung wird immer der frühere (konservativere) ETA verwendet.
+
+### Trend-Engine und Beschleunigungserkennung
+
+Das Plugin puffert die letzten ~40 Minuten (8 Zyklen) aller Messwerte und analysiert:
+
+- **Trend:** Steigt oder fällt die Intensität? (lineare Regression)
+- **Beschleunigung:** Ist der Anstieg in den letzten 3 Zyklen mehr als doppelt so steil wie im Gesamttrend? → `stark_zunehmend` (typisch für herannahende Gewitter)
+- **Konsistenz:** Wie viele Zyklen zeigen in dieselbe Richtung? → Konfidenz-Bonus bis +25 Punkte
+
+### Konfidenz-Score (0–100)
+
+| Quelle aktiv | Punkte |
+|:-------------|:------:|
+| ZAMG-Warnung aktiv | +40 |
+| INCA-Signal | +30 |
+| TAWES-Bestätigung | +20 |
+| Trend konsistent (pro Zyklus) | +5 (max +25) |
+| Beschleunigung erkannt | +10 |
+| INCA-ETA und Physik-ETA stimmen überein | +15 |
+
+Der Konfidenz-Score erscheint in `alarm/konfidenz` und in den Notification-Texten als "Sicherheit: gering/mittel/hoch/sehr hoch".
+
+---
+
+## Alarmstufen-Referenz
+
+Alle `alarm/`-Topics verwenden einheitliche Stufen:
+
+| Stufe | Bedeutung | Typische Reaktion |
+|:-----:|:----------|:------------------|
 | `0` | Ruhig | Keine Aktion |
 | `1` | **Vorsicht** – etwas kündigt sich an | Info-Push, vorsorglich handeln |
-| `2` | **Warnung** – es wird gefährlich | Schutzmaßnahmen aktiv, Push senden |
+| `2` | **Warnung** – es wird gefährlich | Schutzmaßnahmen aktiv |
 | `3` | **Extrem** – höchste Gefahr | Sofortmaßnahmen, zwingender Alarm |
 
-**Grundprinzip:** ZAMG-Warnstufen werden **direkt** gemappt: **Gelb → 1, Orange → 2, Rot/Lila → 3**. Das `aktiv`-Flag spielt keine Rolle für den Level. INCA und TAWES verwenden **Schwellwert-Vielfache**: `1× Schwellwert → Level 1`, `2× → Level 2`, `3× → Level 3`. Alle drei Quellen können **alle Level (0–3) erreichen**.
+`alarm/gesamt` = `max(gewitter, wind, regen, hagel, schnee)` – ideal als einziger Gate-Wert in Loxone-Automatisierungen.
 
-`alarm/gesamt` = `max(gewitter, wind, regen, hagel, schnee)` – der höchste Wert aller 5 Kategorien. Ideal als einziger Gate-Wert in Loxone-Automatisierungen.
+### alarm/regen – Detaillogik
 
----
+| Quelle | Bedingung | → Stufe |
+|:-------|:----------|:-------:|
+| ZAMG | Regen-Warnung Gelb | **1** |
+| INCA allein | `rr_jetzt` ≥ REGEN_ALARM | **1** (max) |
+| INCA (≥ 20 Min. Trend) | Spitzenwert ≥ REGEN_ALARM | **1–2** |
+| INCA + TAWES | Spitzenwert 30 min ≥ 1× REGEN_ALARM | **1** |
+| INCA + TAWES | Spitzenwert 30 min ≥ 2× REGEN_ALARM | **2** |
+| INCA + TAWES | Spitzenwert 30 min ≥ 3× REGEN_ALARM | **3** |
+| TAWES upstream allein | `regen_upstream_mm` ≥ REGEN_ALARM | **1** (max) |
+| TAWES lokal allein | `regen_lokal_mm` ≥ REGEN_ALARM | **1** (max) |
+| ZAMG | Regen-Warnung Orange | **2** |
+| ZAMG | Regen-Warnung Rot/Lila | **3** |
 
-## Wie werden die alarm/ Topics berechnet?
+### alarm/wind – Detaillogik
+
+| Quelle | Bedingung | → Stufe |
+|:-------|:----------|:-------:|
+| ZAMG | Wind-Warnung Gelb | **1** |
+| INCA allein | `fx_max_60min` ≥ BOEN_ALARM | **1** (max) |
+| INCA + TAWES | `fx_max_60min` ≥ 1× BOEN_ALARM | **1** |
+| INCA + TAWES | `fx_max_60min` ≥ 2× BOEN_ALARM | **2** |
+| INCA + TAWES | `fx_max_60min` ≥ 3× BOEN_ALARM | **3** |
+| TAWES Konsens | Upstream-Böen ≥ BOEN_ALARM | **1** (max ohne INCA) |
+| TAWES Wind-Kaskade | Zeitlich gestaffelte Böen erkannt | **1** |
+| ZAMG | Wind-Warnung Orange | **2** |
+| ZAMG | Wind-Warnung Rot/Lila | **3** |
 
 ### alarm/gewitter
 
-| Quelle | Bedingung | → Level |
+| Quelle | Bedingung | → Stufe |
 |:-------|:----------|:-------:|
-| ZAMG | Gewitter-Warnung Gelb (Stufe 1) | **1** |
-| TAWES | Gewittersignal Lvl 1 (Druckabfall + hohe Feuchte) | **1** |
-| ZAMG | Gewitter-Warnung Orange (Stufe 2) | **2** |
-| TAWES | Gewittersignal Lvl 2 (+ starke Böenzunahme) | **2** |
+| ZAMG | Gewitter-Warnung Gelb | **1** |
+| TAWES | Gewittersignal (Druck + Feuchte) | **1** |
+| ZAMG | Gewitter-Warnung Orange | **2** |
+| TAWES | Gewittersignal + starke Böenzunahme | **2** |
 | System | Behördliche Akutwarnung (GWA) | **≥ 2** |
-| ZAMG | Gewitter-Warnung Rot/Lila (Stufe 3/4) | **3** |
+| ZAMG | Gewitter-Warnung Rot/Lila | **3** |
 
-### alarm/wind
+### alarm/hagel und alarm/schnee
 
-INCA verwendet `fx_max_60min` direkt (kein Konsens nötig – Nowcast-Modell). TAWES benötigt entweder Konsens-Bestätigung (`sturm_upstream=1`) oder eine erkannte Wind-Kaskade (`wind_kaskade=1`).
-
-| Quelle | Bedingung | → Level |
-|:-------|:----------|:-------:|
-| ZAMG | Wind-Warnung Gelb (Stufe 1) | **1** |
-| INCA | `fx_max_60min` ≥ **1 × BOEN_ALARM** | **1** |
-| TAWES | Konsens-Sturm upstream ≥ **1 × BOEN_ALARM** (`sturm_upstream=1`) | **1** |
-| TAWES | Wind-Kaskade erkannt (`wind_kaskade=1`) – Vorwarnung | **1** |
-| ZAMG | Wind-Warnung Orange (Stufe 2) | **2** |
-| INCA | `fx_max_60min` ≥ **2 × BOEN_ALARM** | **2** |
-| TAWES | Konsens-Sturm upstream ≥ **2 × BOEN_ALARM** | **2** |
-| ZAMG | Wind-Warnung Rot/Lila (Stufe 3/4) | **3** |
-| INCA | `fx_max_60min` ≥ **3 × BOEN_ALARM** | **3** |
-| TAWES | Konsens-Sturm upstream ≥ **3 × BOEN_ALARM** | **3** |
-
-> **TAWES Wind-Konsens (ab v0.4.24):** Mind. 30 % der Upstream-Tal-Stationen (absolut mind. 2) müssen Böen ≥ BOEN_ALARM melden. Alpine Stationen (> konfigurierter Seehöhe) sind ausgeschlossen. Eine Einzelstation allein löst nie Alarm aus.
-
-### alarm/regen
-
-`inca/bald_regen` und Regenraten unter REGEN_ALARM lösen **keinen** Alarm aus. TAWES Lokal-Regen wird nur für Stationen innerhalb des konfigurierten Lokal-Umkreises (Standard: 25 km) gewertet.
-
-| Quelle | Bedingung | → Level |
-|:-------|:----------|:-------:|
-| ZAMG | Regen-Warnung Gelb (Stufe 1) | **1** |
-| INCA | Regenrate `rr_jetzt` ≥ **1 × REGEN_ALARM** | **1** |
-| TAWES | Upstream-Intensität `regen_upstream_mm` ≥ **1 × REGEN_ALARM** | **1** |
-| TAWES | Lokal-Regen `regen_lokal_mm` ≥ **1 × REGEN_ALARM** (≤ Lokal-Umkreis) | **1** |
-| ZAMG | Regen-Warnung Orange (Stufe 2) | **2** |
-| INCA | Regenrate `rr_jetzt` ≥ **2 × REGEN_ALARM** | **2** |
-| TAWES | `regen_upstream_mm` oder `regen_lokal_mm` ≥ **2 × REGEN_ALARM** | **2** |
-| ZAMG | Regen-Warnung Rot/Lila (Stufe 3/4) | **3** |
-| INCA | Regenrate `rr_jetzt` ≥ **3 × REGEN_ALARM** | **3** |
-| TAWES | `regen_upstream_mm` oder `regen_lokal_mm` ≥ **3 × REGEN_ALARM** | **3** |
-
-> `inca/bald_regen` ist ein Info-Topic für Bewässerungssteuerung und löst absichtlich **keinen** `alarm/regen` aus.
-
-### alarm/hagel
-
-| Quelle | Bedingung | → Level |
-|:-------|:----------|:-------:|
-| ZAMG | Hagel-Warnung Gelb (Stufe 1) | **1** |
-| INCA | Hagel oder Graupel möglich (`bald_hagel` / `bald_graupel`) | **1** |
-| ZAMG | Hagel-Warnung Orange/höher (Stufe 2+) | **2** |
-
-### alarm/schnee
-
-| Quelle | Bedingung | → Level |
-|:-------|:----------|:-------:|
-| ZAMG | Schnee- oder Glatteis-Warnung Gelb (Stufe 1) | **1** |
-| INCA | Niederschlagstyp = Schnee (PT=2) oder Schneeregen (PT=3) | **1** |
-| ZAMG | Schnee- oder Glatteis-Warnung Orange/höher (Stufe 2+) | **2** |
+`alarm/hagel` max. Stufe 2. `alarm/schnee` max. Stufe 2. Ausgelöst durch ZAMG-Warnungen und INCA Niederschlagstyp-Erkennung.
 
 ---
 
-## Konfigurierbare Schwellwerte
+## Vollständige MQTT-Topic-Referenz
 
-### Böen-Alarmschwelle (`BOEN_ALARM`)
+Standard-Präfix: `unwetter/` (in den Einstellungen änderbar). Alle Topics werden mit `retain=true` publiziert.
 
-**Standard: 60 km/h** (= Beaufort 8, Sturmböen)
+### System
 
-| Bedingung | `alarm/wind` Level |
-|:----------|:------------------:|
-| INCA `fx_max_60min` oder TAWES Konsens-Upstream ≥ **1 × BOEN_ALARM** | **1** (Vorsicht) |
-| ≥ **2 × BOEN_ALARM** | **2** (Warnung) |
-| ≥ **3 × BOEN_ALARM** | **3** (Extrem) |
+| Topic | Beschreibung | Werte |
+|:------|:-------------|:------|
+| `status` | Systemzustand | `OK` / `Error - [Quelle]` |
+| `status/zamg_ok` | ZAMG API erreichbar | `0` / `1` |
+| `status/inca_ok` | INCA API erreichbar | `0` / `1` |
+| `status/tawes_ok` | TAWES API erreichbar | `0` / `1` |
+| `letzter_abruf_datum` | Zeitpunkt letzter Abruf | `07.06.2026 14:30:00` |
+| `letzter_abruf_epoch` | Unix-Timestamp letzter Abruf | `1749303000` |
 
-Empfehlungen: `40 km/h` für Beaufort 6 (sensibel), `60 km/h` für Sturmschutz (Standard), `80 km/h` für schwere Stürme (Beaufort 9+).
+### Gesamtstatus (alarm/)
 
-### Regen-Alarmschwelle (`REGEN_ALARM`)
+| Topic | Beschreibung | Werte |
+|:------|:-------------|:------|
+| `alarm/gesamt` | Höchster Wert aller Kategorien – primärer Gate-Wert | `0`–`3` |
+| `alarm/gewitter` | Gewittergefahr | `0`–`3` |
+| `alarm/wind` | Windgefahr | `0`–`3` |
+| `alarm/regen` | Regenrisiko | `0`–`3` |
+| `alarm/hagel` | Hagelgefahr | `0`–`2` |
+| `alarm/schnee` | Schnee/Glatteis | `0`–`2` |
+| `alarm/stufe` | Höchste offizielle ZAMG-Warnstufe (nur ZAMG) | `0`–`4` |
+| `alarm/konfidenz` | Sicherheits-Score der Vorhersage | `0`–`100` |
+| `alarm/eta_min` | Minuten bis Regenfront ankommt (bester verfügbarer ETA) | min / `-1` |
+| `alarm/regen_trend` | Intensitätstrend | `stark_zunehmend` / `zunehmend` / `stabil` / `abnehmend` / `unbekannt` |
+| `alarm/wind_quelle` | Welche Quelle hat `alarm/wind` ausgelöst | Text |
+| `alarm/regen_quelle` | Welche Quelle hat `alarm/regen` ausgelöst | Text |
+| `alarm/zusammenfassung` | Lesbarer Alarmtext | z.B. `🌧️ Regen bestätigt (Stufe 2/3) – Ankunft in ~12 min` |
+| `alarm/entwarnung` | Wechselt einmalig auf `1` wenn Alarm endet | `0` / `1` |
 
-**Standard: 10.0 mm/h** (starker Regen)
+### GeoSphere Warnungen (zamg/)
 
-**Wichtig:** TAWES liefert Regen in mm/10min. Die Umrechnung auf mm/h (× 6) erfolgt intern. Der konfigurierte Wert gilt immer in mm/h.
+| Topic | Beschreibung | Werte |
+|:------|:-------------|:------|
+| `zamg/max_stufe` | Höchste aktive Warnstufe | `0`–`4` |
+| `zamg/irgendwas_aktiv` | Mind. eine aktive/baldige Warnung | `0` / `1` |
+| `zamg/akutwarnung` | Behördliche Akutwarnung (GWA) | `0` / `1` |
+| `zamg/{typ}/stufe` | Warnstufe je Wettertyp | `0`–`4` |
+| `zamg/{typ}/aktiv` | Warnung gerade aktiv | `0` / `1` |
+| `zamg/{typ}/bald` | Warnung beginnt in < 30 min | `0` / `1` |
+| `zamg/{typ}/start_epoch` | Warnungsbeginn Unix-Timestamp | `0` wenn keine |
+| `zamg/{typ}/end_epoch` | Warnungsende Unix-Timestamp | `0` wenn keine |
+| `zamg/{typ}/notification` | Klartext für Push | `⚠️ ORANGE – Wind \| 14:00–20:00` |
 
-| Bedingung | `alarm/regen` Level |
-|:----------|:-------------------:|
-| INCA oder TAWES ≥ **1 × REGEN_ALARM** | **1** (Vorsicht) |
-| ≥ **2 × REGEN_ALARM** | **2** (Warnung) |
-| ≥ **3 × REGEN_ALARM** | **3** (Extrem) |
+**Typen `{typ}`:** `wind`, `regen`, `schnee`, `glatteis`, `gewitter`, `hagel`, `hitze`, `kaelte`
 
-Empfehlungen: `5.0 mm/h` für Bewässerungsabschaltung, `10.0 mm/h` Standard, `30.0 mm/h` bei Starkregen.
+### INCA Nowcast (inca/)
+
+| Topic | Beschreibung | Einheit |
+|:------|:-------------|:--------|
+| `inca/fx` | Aktuelle Böenstärke | km/h |
+| `inca/ff` | Aktuelle Windgeschwindigkeit | km/h |
+| `inca/fx_max_30min` | Max. Böen nächste 30 min | km/h |
+| `inca/fx_max_60min` | Max. Böen nächste 60 min (→ `alarm/wind`) | km/h |
+| `inca/rr` | Aktuelle Regenrate | mm/h |
+| `inca/regen_alarm` | Regenrate ≥ REGEN_ALARM | `0` / `1` |
+| `inca/minuten_bis_regen` | Zeit bis signifikanter Regen | min / `-1` |
+| `inca/bald_regen` | Regen in < 30 min erwartet | `0` / `1` |
+| `inca/bald_hagel` | Hagel in < 60 min erwartet | `0` / `1` |
+| `inca/bald_graupel` | Graupel möglich | `0` / `1` |
+| `inca/bald_sturm_30` | Böen ≥ BOEN_ALARM in < 30 min | `0` / `1` |
+| `inca/bald_sturm_60` | Böen ≥ BOEN_ALARM in < 60 min | `0` / `1` |
+| `inca/pt` | Niederschlagstyp jetzt (Code) | `1`=Regen, `2`=Schnee, `3`=Schneeregen, `4`=Graupel, `5`=Hagel, `255`=kein |
+| `inca/pt_name` | Niederschlagstyp jetzt (Text) | `Regen`, `Schnee`, … |
+| `inca/pt_bald` | Typ des nächsten Regens (Code) | wie `inca/pt` |
+| `inca/pt_bald_name` | Typ des nächsten Regens (Text) | z.B. `Regen` |
+
+> `inca/bald_regen` löst **keinen** `alarm/regen`-Alarm aus – es ist ein Info-Topic ideal für Bewässerungssteuerung.
+
+### TAWES 360° (tawes/)
+
+| Topic | Beschreibung | Einheit |
+|:------|:-------------|:--------|
+| `tawes/dominante_windrichtung` | Dominante Windrichtung (vektorgewichtet) | Grad 0–360 |
+| `tawes/dominante_windrichtung_name` | Windrichtung | `N`, `NO`, `O`, `SO`, `S`, `SW`, `W`, `NW` |
+| `tawes/upstream_aktiv` | Anzahl aktiver Upstream-Stationen | Ganzzahl |
+| `tawes/wind_upstream_kmh` | Max. Böen upstream (Rohwert, kein Konsens) | km/h |
+| `tawes/sturm_upstream` | Konsens-Sturm bestätigt (≥ 30% Upstream) | `0` / `1` |
+| `tawes/wind_kaskade` | Zeitlich gestaffelte Böen (Sturmfront im Anmarsch) | `0` / `1` |
+| `tawes/wind_kaskade_eta_min` | ETA Sturmfront laut Kaskade | min / `-1` |
+| `tawes/alpine_upstream` | Anzahl alpiner Upstream-Stationen (ausgeschlossen) | Ganzzahl |
+| `tawes/regen_upstream` | Regen aus Windrichtung (letzte 30 min) | `0` / `1` |
+| `tawes/regen_upstream_mm` | Max. Upstream-Regen-Intensität | mm/h |
+| `tawes/regen_lokal` | Regen im Lokal-Umkreis | `0` / `1` |
+| `tawes/regen_lokal_mm` | Max. Regenintensität im Lokal-Umkreis | mm/h |
+| `tawes/regen_lokal_station` | Station die Lokal-Regen meldet | z.B. `GMUNDEN (12km) 8.4mm/h` |
+| `tawes/gewitter_signal` | Gewitterindikator | `0`=kein, `1`=möglich, `2`=akut |
+| `tawes/naechste_station_name` | Nächste Upstream-Station | Text |
+| `tawes/letztes_update` | Zeitstempel letzter TAWES-Abruf | Datum/Uhrzeit |
+
+### Notifications (notification/)
+
+Textmeldungen für Push-Benachrichtigungen in lesbarem Deutsch – kein technischer Jargon.
+
+| Topic | Beschreibung | Beispiel |
+|:------|:-------------|:---------|
+| `notification/geosphere` | ZAMG-Warntext. **Immer aktiv.** | `⚠️ ORANGE – Gewitter \| heute 15:00–21:00` |
+| `notification/inca` | Nowcast-Vorhersage in Klartext. | `🌧️ Regen erwartet in ~12 Minuten – durch Wetterstationen bestätigt (Sicherheit: hoch)` |
+| `notification/tawes` | Lagebericht der Umgebungsstationen. | `🌧️ Regen aus NW nähert sich – 22 mm/h gemessen, Ankunft in ~15 Minuten, Intensität nimmt zu` |
+| `notification/alle` | Kombinierte Hauptmeldung. **Empfehlung für Loxone Push.** | `🌧️ Regen bestätigt (Stufe 2/3) – Ankunft in ~12 min \| Sicherheit: hoch` |
+| `notification/tageswarnung` | ZAMG-Warnungen für die nächsten 8 Stunden. | `📅 heute 16:00: ⚠️ GELB Gewitter` |
+| `notification/entwarnung` | Einmalig bei Alarmende. | `Entwarnung – kein Unwetter mehr` |
+
+**Hinweis:** `notification/inca` und `notification/tawes` werden immer gesendet (auch ohne aktiven Alarm), damit Loxone eigenständig entscheiden kann, was angezeigt wird. Bei `alarm/gesamt = 0` enthält `notification/alle` den Tageswarnung-Text oder ist leer.
+
+---
+
+## Installation
+
+1. ZIP über den **LoxBerry Plugin Manager** installieren
+2. In die **Einstellungen** wechseln
+3. **Standort festlegen** – Adresse eingeben → "Suchen", oder "Vom Miniserver" übernehmen
+4. Dienste aktivieren: ZAMG, INCA Nowcast, TAWES 360°
+5. Schwellwerte anpassen (Böen-Alarm, Regen-Alarm)
+6. MQTT-Broker einstellen (Standard: LoxBerry MQTT Gateway automatisch)
+7. Daemon im **Status-Tab** starten
+8. In Loxone Config: MQTT Virtual Inputs anlegen
 
 ---
 
@@ -188,145 +320,16 @@ Empfehlungen: `5.0 mm/h` für Bewässerungsabschaltung, `10.0 mm/h` Standard, `3
 | TAWES 360° aktivieren | Ja | Wetterstationsnetz auswerten |
 | TAWES Stationsradius | 120 km | Suchradius für TAWES-Stationen |
 | TAWES Max. Stationen | 25 | Anzahl Stationen pro API-Abruf |
-| TAWES Konsens-Schwelle | 30 % | Mindestanteil Upstream-Stationen für Wind-Alarm (absolut mind. 2) |
-| TAWES Max. Seehöhe Upstream | 1200 m | Alpine Stationen über dieser Seehöhe aus Wind-Konsens ausschließen |
-| **TAWES Lokal-Regen Umkreis** | **25 km** | **Umkreis für `tawes/regen_lokal` und lokalen `alarm/regen`-Beitrag** |
+| TAWES Konsens-Schwelle | 30 % | Mindestanteil Upstream-Stationen für Wind-Alarm |
+| TAWES Upstream-Winkel | 45 ° | Halbwinkel des Upstream-Kegels (45° = 90° Gesamtkegel) |
+| TAWES Max. Seehöhe Upstream | 1200 m | Alpine Stationen über dieser Seehöhe ausgeschlossen |
+| TAWES Lokal-Regen Umkreis | 25 km | Umkreis für Lokal-Regen-Erkennung |
 | Abruf-Intervall | 300 s | Wie oft Daten abgerufen werden |
-| **Böen-Alarmschwelle** | **60 km/h** | **INCA + TAWES Wind-Alarm ab diesem Wert** |
-| **Regen-Alarmschwelle** | **10.0 mm/h** | **INCA + TAWES Regen-Alarm ab dieser Regenrate** |
-| Min. Warnstufe | 1 (Gelb) | Ab welcher ZAMG-Stufe Notification-Text erzeugt wird |
+| **Böen-Alarmschwelle** | **60 km/h** | Stufe 1 ab 60 km/h, Stufe 2 ab 120, Stufe 3 ab 180 |
+| **Regen-Alarmschwelle** | **10.0 mm/h** | Stufe 1 ab 10, Stufe 2 ab 20, Stufe 3 ab 30 mm/h |
+| Min. Warnstufe für Notifications | 1 | Ab welcher ZAMG-Stufe Notification-Text erzeugt wird |
 | MQTT Präfix | `unwetter/` | Präfix für alle MQTT Topics |
 | MQTT Broker | automatisch | Standard: LoxBerry MQTT Gateway |
-
----
-
-## Vollständige MQTT-Topic-Referenz
-
-Standard-Präfix: `unwetter/` (in den Einstellungen änderbar). Alle Topics werden mit `retain=true` publiziert.
-
-### System-Topics
-
-| Topic | Beschreibung | Werte |
-|:------|:-------------|:------|
-| `status` | Systemzustand des Daemons | `OK` / `Error - [Quelle]` |
-| `status/zamg_ok` | ZAMG API erreichbar | `0` / `1` |
-| `status/inca_ok` | INCA API erreichbar | `0` / `1` |
-| `status/tawes_ok` | TAWES API erreichbar | `0` / `1` |
-| `letzter_abruf_datum` | Zeitpunkt des letzten Abrufs | `07.06.2026 14:30:00` |
-| `letzter_abruf_epoch` | Unix-Timestamp des letzten Abrufs | `1749303000` |
-
-### Gesamtstatus (alarm/)
-
-| Topic | Beschreibung | Mögliche Werte |
-|:------|:-------------|:---------------|
-| `alarm/gesamt` | `max(gewitter, wind, regen, hagel, schnee)` – primärer Gate-Wert | `0`–`3` |
-| `alarm/gewitter` | Gewittergefahr aus ZAMG + TAWES-Gewittersignal | `0`–`3` |
-| `alarm/wind` | Windgefahr aus ZAMG + INCA + TAWES Konsens/Kaskade | `0`–`3` |
-| `alarm/regen` | Regenrisiko aus ZAMG + INCA + TAWES (Upstream + Lokal) | `0`–`3` |
-| `alarm/hagel` | Hagelgefahr aus ZAMG + INCA | `0`–`2` |
-| `alarm/schnee` | Schnee/Glatteis aus ZAMG + INCA | `0`–`2` |
-| `alarm/stufe` | Höchste **offizielle** ZAMG-Warnstufe (nur ZAMG) | `0`–`4` |
-| `alarm/zusammenfassung` | Fertiger Anzeigetext mit Emoji-Symbolen | Text |
-| `alarm/entwarnung` | Wechselt **einmalig** auf `1` wenn Alarm endet (dann sofort wieder `0`) | `0` / `1` |
-| `alarm/wind_quelle` | Welche Quelle hat `alarm/wind` ausgelöst | `ZAMG` / `INCA (52km/h)` / `TAWES_STURM (65km/h)` / `TAWES_KASKADE` / `–` |
-| `alarm/regen_quelle` | Welche Quelle hat `alarm/regen` ausgelöst | `ZAMG` / `INCA (3.5mm/h)` / `TAWES_UPSTREAM (12mm/h)` / `TAWES_LOKAL (VÖCKLABRUCK 8km 31.8mm/h)` / `–` |
-
-### GeoSphere Austria Warnungen (zamg/)
-
-| Topic | Beschreibung | Werte |
-|:------|:-------------|:------|
-| `zamg/max_stufe` | Höchste aktive Warnstufe | `0`–`4` |
-| `zamg/irgendwas_aktiv` | Mind. eine aktive/baldige Warnung (Gate für Morgen-Push) | `0` / `1` |
-| `zamg/akutwarnung` | Behördliche Akutwarnung (GWA) | `0` / `1` |
-| `zamg/letzter_abruf` | Zeitstempel letzter ZAMG-Abruf | Datum/Uhrzeit |
-| `zamg/{typ}/stufe` | Warnstufe je Wettertyp | `0`–`4` |
-| `zamg/{typ}/aktiv` | Warnung gerade aktiv | `0` / `1` |
-| `zamg/{typ}/bald` | Warnung beginnt in < 30 min | `0` / `1` |
-| `zamg/{typ}/start_epoch` | Warnungsbeginn Unix-Timestamp | `0` wenn keine Warnung |
-| `zamg/{typ}/end_epoch` | Warnungsende Unix-Timestamp | `0` wenn keine Warnung |
-| `zamg/{typ}/notification` | Klartext für Push-Benachrichtigung | `ORANGE – Wind \| heute 14:00–20:00` |
-
-**Typen `{typ}`:** `wind`, `regen`, `schnee`, `glatteis`, `gewitter`, `hagel`, `hitze`, `kaelte`
-
-### INCA Nowcast (inca/)
-
-| Topic | Beschreibung | Einheit |
-|:------|:-------------|:--------|
-| `inca/fx` | Aktuelle Böenstärke | km/h |
-| `inca/ff` | Aktuelle Windgeschwindigkeit | km/h |
-| `inca/fx_max_30min` | Max. Böen in den nächsten 30 min | km/h |
-| `inca/fx_max_60min` | Max. Böen in den nächsten 60 min – entscheidet über `alarm/wind` | km/h |
-| `inca/rr` | Aktuelle Regenrate | mm/h |
-| `inca/regen_alarm` | Regenrate ≥ REGEN_ALARM | `0` / `1` |
-| `inca/minuten_bis_regen` | Zeit bis Regenstart | min (`-1` = bleibt trocken) |
-| `inca/bald_regen` | Regen in < 30 min erwartet (kein alarm/regen-Trigger) | `0` / `1` |
-| `inca/bald_hagel` | Hagel in < 60 min erwartet | `0` / `1` |
-| `inca/bald_graupel` | Graupel in < 60 min möglich | `0` / `1` |
-| `inca/bald_sturm_30` | Böen ≥ BOEN_ALARM in < 30 min (Info-Topic) | `0` / `1` |
-| `inca/bald_sturm_60` | Böen ≥ BOEN_ALARM in < 60 min (Info-Topic) | `0` / `1` |
-| `inca/pt` | Niederschlagstyp jetzt (Code) | `1`=Regen, `2`=Schnee, `3`=Schneeregen, `4`=Graupel, `5`=Hagel, `255`=kein |
-| `inca/pt_name` | Niederschlagstyp jetzt (Text) | `Regen`, `Schnee`, `kein Niederschlag`, … |
-| `inca/pt_bald` | Typ des nächsten Regens (Code) | wie `inca/pt`; `255` wenn kein Regen in Sicht |
-| `inca/pt_bald_name` | Typ des nächsten Regens (Text) | z.B. `Regen`; leer wenn kein Regen in Sicht |
-| `inca/letzter_abruf` | Zeitstempel letzter INCA-Abruf | Datum/Uhrzeit |
-
-### TAWES 360° Stationsdaten (tawes/)
-
-| Topic | Beschreibung | Einheit/Werte |
-|:------|:-------------|:-------------|
-| `tawes/dominante_windrichtung` | Dominante Windrichtung (vektorgewichtet) | Grad (0–360) |
-| `tawes/dominante_windrichtung_name` | Windrichtung als Himmelsrichtung | `N`, `NO`, `O`, `SO`, `S`, `SW`, `W`, `NW` |
-| `tawes/upstream_aktiv` | Anzahl aktiver Upstream-Stationen | Ganzzahl |
-| `tawes/wind_upstream_kmh` | Max. Böen an Upstream-Tal-Stationen (Rohwert, kein Konsens) | km/h |
-| `tawes/wind_trend` | Böen-Trendrichtung (letzte 60 min, Regression) | `-1`=fallend, `0`=stabil, `1`=steigend |
-| `tawes/sturm_upstream` | Konsens-Sturm bestätigt (≥ 30% Upstream-Tal-Stationen) | `0` / `1` |
-| `tawes/wind_kaskade` | Zeitlich gestaffelte Böen upstream (Sturmfront im Anmarsch) | `0` / `1` |
-| `tawes/wind_kaskade_eta_min` | ETA der Sturmfront laut Kaskade | min (`-1` = unbekannt) |
-| `tawes/wind_kaskade_speed_kmh` | Berechnete Frontgeschwindigkeit (Kaskade) | km/h |
-| `tawes/alpine_upstream` | Anzahl alpiner Upstream-Stationen (aus Konsens ausgeschlossen) | Ganzzahl |
-| `tawes/regen_upstream` | Regen aus Windrichtung (letzte 30 min, ab ~0.6 mm/h) | `0` / `1` |
-| `tawes/regen_upstream_mm` | Max. Upstream-Regen-Intensität (nur bei Konsens) | mm/h (0 = kein Konsens) |
-| `tawes/regen_eta_min` | Minuten bis Regenfront ankommt | min (`-1` = unbekannt) |
-| `tawes/front_speed_kmh` | Berechnete Frontgeschwindigkeit | km/h |
-| `tawes/regen_konfidenz` | Zuverlässigkeit der ETA-Berechnung | `0`–`100` (%) |
-| `tawes/regen_lokal` | Regen jetzt innerhalb Lokal-Umkreis (konfigurierbar, Standard 25 km) | `0` / `1` |
-| `tawes/regen_lokal_mm` | Max. Regenintensität im Lokal-Umkreis | mm/h (0 = kein Lokal-Regen) |
-| `tawes/regen_lokal_station` | Station die `regen_lokal_mm` bestimmt | z.B. `VOECKLABRUCK (12km) 8.4mm/h` |
-| `tawes/druck_trend` | Luftdrucktendenz nächste Upstream-Station | hPa/10min, negativ=fallend |
-| `tawes/gewitter_signal` | Gewitterindikator aus Druck + Feuchte + Böen | `0`=kein, `1`=möglich, `2`=akut |
-| `tawes/stationen_anzahl` | Gesamtzahl erreichter Stationen im Radius | Ganzzahl |
-| `tawes/naechste_station` | Name, Distanz und Richtung der nächsten Upstream-Station | `Gmunden (23km, SW)` |
-| `tawes/api_ok` | Letzter TAWES-API-Abruf erfolgreich | `0` / `1` |
-| `tawes/letztes_update` | Zeitstempel letzter TAWES-Abruf | Datum/Uhrzeit |
-
-### Notifications (notification/)
-
-Textmeldungen für Push-Benachrichtigungen. Werden nur publiziert wenn sich der Inhalt ändert.
-
-**Wichtig:** `notification/inca`, `notification/tawes` und `notification/alle` werden **nur publiziert wenn `alarm/gesamt ≥ 1`**. Bei inaktivem Alarm werden diese Topics leer (retained Message im Broker wird gelöscht). `notification/geosphere` ist immer aktiv. `notification/alle` enthält **keine** "kein Alarm"-Texte von Quellen die selbst keinen Alarm haben.
-
-| Topic | Beschreibung | Beispiel |
-|:------|:-------------|:---------|
-| `notification/geosphere` | ZAMG-Warnungen als Klartext. **Immer aktiv.** | `⚠️ ORANGE – Wind \| heute 14:00 – morgen 06:00` |
-| `notification/inca` | INCA Nowcast-Zusammenfassung. Nur bei alarm/gesamt ≥ 1. | `🟠 Sturmböen <30 min: max 75 km/h` |
-| `notification/tawes` | TAWES-Lagebericht. Nur bei alarm/gesamt ≥ 1. | `🌧 Regenfront ~18min \| 62km/h aus W \| 78% Konfidenz` |
-| `notification/alle` | Alle aktiven Meldungen kombiniert (durch `──` getrennt). **Empfehlung für Loxone Push.** | Kombinierter Text / `✅ Entwarnung` (einmalig) |
-
-**Entwarnung:** Wenn `alarm/gesamt` von ≥1 auf 0 fällt: `alarm/entwarnung` wechselt einmalig auf `1`, `notification/alle` sendet einmalig `✅ Entwarnung – alle Wetterwarnungen aufgehoben.`
-
----
-
-## Installation
-
-1. ZIP über den **LoxBerry Plugin Manager** installieren
-2. In die **Einstellungen** wechseln
-3. **Standort festlegen** – Adresse eingeben → "Suchen", oder "Vom Miniserver" Button
-4. Dienste aktivieren: ZAMG, INCA Nowcast, TAWES 360°
-5. Schwellwerte nach Bedarf anpassen (Böen-Alarm, Regen-Alarm)
-6. TAWES Konsens-Schwelle und Seehöhe prüfen (Standard meist sinnvoll)
-7. MQTT-Broker einstellen (Standard: LoxBerry MQTT Gateway automatisch)
-8. Daemon im **Status-Tab** starten
-9. In **Loxone Config**: MQTT Virtual Inputs anlegen (s.u.)
 
 ---
 
@@ -344,12 +347,13 @@ unwetter/alarm/regen             → "Regen-Alarm"
 unwetter/alarm/gewitter          → "Gewitter-Alarm"
 unwetter/alarm/hagel             → "Hagel-Alarm"
 
-# Diagnose
-unwetter/alarm/wind_quelle       → "Wind-Alarm Quelle"  (Text: ZAMG/INCA/TAWES/–)
-unwetter/alarm/regen_quelle      → "Regen-Alarm Quelle" (Text: ZAMG/INCA/TAWES/–)
+# ETA und Sicherheit
+unwetter/alarm/eta_min           → "Regen ETA Minuten"
+unwetter/alarm/konfidenz         → "Vorhersage-Sicherheit"
 
-# Push-Benachrichtigung
-unwetter/notification/alle       → "Wettermeldung" (Text für Push-Trigger)
+# Push-Benachrichtigungen
+unwetter/notification/alle       → "Wettermeldung"
+unwetter/notification/tageswarnung → "Tageswarnung"
 ```
 
 ### Automatisierungsbeispiele
@@ -378,17 +382,12 @@ Auslöser: alarm/gesamt >= 2  (Wert geändert, von kleinerem Wert)
 Nachricht: notification/alle
 ```
 
-**Morgen-Zusammenfassung ZAMG (nur wenn Warnung anliegt):**
+**Morgen-Zusammenfassung (täglich 07:00):**
 ```
 Zeitprogramm: täglich 07:00 Uhr
-Bedingung:    zamg/irgendwas_aktiv = 1   ← Gate: 0 = kein Push
+Bedingung:    zamg/irgendwas_aktiv = 1  ← Gate: 0 = kein Push
 Nachricht:    notification/geosphere
-```
-
-**Entwarnung nach Unwetter:**
-```
-Auslöser: alarm/entwarnung = 1  (wechselt einmalig auf 1 wenn Alarm endet)
-Nachricht: notification/alle    (enthält "✅ Entwarnung – alle Wetterwarnungen aufgehoben.")
+              + notification/tageswarnung  (Warnungen im Tagesverlauf)
 ```
 
 **Hagelschutz:**
@@ -397,71 +396,69 @@ Auslöser: alarm/hagel >= 1  ODER  inca/bald_hagel = 1
 Aktion:   Carport-Tor schließen, Push senden
 ```
 
+**Entwarnung nach Unwetter:**
+```
+Auslöser: alarm/entwarnung = 1  (wechselt einmalig auf 1 wenn Alarm endet)
+Nachricht: notification/alle
+```
+
 ---
 
 ## Technische Details
 
 ### Daemon-Betrieb & Zuverlässigkeit
 
-**Autostart nach Reboot:** Der Daemon startet automatisch 120 Sekunden nach dem Systemstart – die Verzögerung stellt sicher dass der MQTT-Broker schon läuft. Eingerichtet via `/etc/cron.d/unwetter4lox` (root-owned, überleben Updates).
+**Autostart nach Reboot:** Der Daemon startet automatisch 120 Sekunden nach dem Systemstart (Verzögerung damit der MQTT-Broker bereits läuft). Eingerichtet via `/etc/cron.d/unwetter4lox` (root-owned, überlebt Plugin-Updates).
 
-**Täglicher Neustart:** Jeden Tag um 03:00 Uhr wird der Daemon automatisch neu gestartet. Dies bereinigt potenzielle MQTT-Langzeitprobleme (stale TCP-Verbindungen die nach mehreren Tagen auftreten können).
+**Täglicher Neustart:** Täglich um 03:00 Uhr wird der Daemon automatisch neu gestartet. Dies bereinigt potenzielle MQTT-Langzeitprobleme.
 
-**Watchdog (alle 5 min):** Ein Cron-Job prüft alle 5 Minuten ob der Daemon noch läuft. Bei einem Absturz werden `daemon.pid` und `state.json` automatisch gelöscht und der Daemon neu gestartet. Die Datei `state.json` wird gelöscht damit die UI keine veralteten Wetterdaten anzeigt.
+**Watchdog (alle 5 min):** Ein Cron-Job prüft ob der Daemon noch läuft. Bei einem Absturz werden PID-Datei und state.json gelöscht und der Daemon neu gestartet.
 
-**MQTT-Robustheit (v0.9.9):** paho-mqtt `loop_start()` + `reconnect_delay_set(5s, 60s)` sorgen für automatische Wiederverbindung. Der Daemon erkennt beim Start bestehende Instanzen und beendet diese (verhindert Client-ID-Konflikte). Ein 5-Minuten-Watchdog im Python-Daemon triggert bei dauerhafter Trennung einen Hard-Reset. Zombie-TCP-Verbindungen werden nach 30 Minuten erkannt.
+**MQTT-Robustheit:** paho-mqtt `loop_start()` + `reconnect_delay_set(5s, 60s)` sorgen für automatische Wiederverbindung. Die Client-ID enthält den Hostnamen um Konflikte bei mehreren Instanzen zu vermeiden. Ein Watchdog erkennt Zombie-TCP-Verbindungen nach 30 Minuten.
 
-**INCA Parallel-Abruf (v0.9.9):** Die 4 INCA API-Parameter (ff, fx, rr, pt) werden gleichzeitig (parallel) abgerufen. Bei API-Timeouts dauert ein Zyklus maximal ~15 Sekunden statt bis zu 60 Sekunden (4 × 15s sequentiell).
+**INCA Parallel-Abruf:** Die 4 INCA API-Parameter (ff, fx, rr, pt) werden gleichzeitig abgerufen. Bei API-Timeouts dauert ein Zyklus maximal ~15 Sekunden.
 
-**API-Fehler über MQTT:**  `status/api_ok` (0/1) und `status/api_fehler` (Text) informieren Loxone bei API-Problemen. Damit können Push-Notifications für technische Fehler konfiguriert werden.
+### TAWES – So funktioniert es
 
-### TAWES 360° – So funktioniert es
+**Windrichtungsberechnung:** Vektorgewichteter Durchschnitt (keine einfache Mittelung – die würde bei 350° und 10° fälschlicherweise 180° ergeben). Stärker blasende Stationen haben mehr Gewicht.
 
-**Stationen laden:** Der Daemon löscht den Stations-Cache bei **jedem Start** automatisch und lädt alle Stationen im Radius frisch von der GeoSphere-API. Datenlücken in den ersten 10–20 Minuten nach Start sind normal (Buffer füllt sich).
+**Upstream-Kegel:** Alle Stationen innerhalb des konfigurierten Halbwinkels (Standard ±45°, also 90° Gesamtkegel) der dominanten Windrichtung gelten als upstream. Das Wetter kommt von dort.
 
-**Windrichtungsberechnung:** Vektorgewichteter Durchschnitt (keine einfache Mittelung die bei 350°+10° = 180° falsch wäre). Stärker blas ende Stationen haben mehr Gewicht.
+**TAWES Messwerte:** Die GeoSphere-API liefert Niederschlag in mm/10min. Das Plugin rechnet intern auf mm/h um (×6). Der konfigurierte REGEN_ALARM gilt immer in mm/h.
 
-**Upstream-Erkennung:** Alle Stationen innerhalb ±70° der dominanten Windrichtung. Das Wetter kommt von dort.
+**Stationen-Cache:** Der Daemon löscht den Stations-Cache bei jedem Start und lädt alle Stationen frisch. Datenlücken in den ersten 10–20 Minuten nach Start sind normal.
 
-**Wind-Konsens (ab v0.4.24):** Mind. max(2, 30%) der Upstream-Tal-Stationen müssen Böen ≥ BOEN_ALARM melden. Alpine Stationen (> MAX_UPSTREAM_HOEHE_M) erscheinen im Log aber fließen nicht in den Konsens ein. Verhindert False-Alarms durch Ausreißer-Stationen.
+### Diagnose-Topics
 
-**Wind-Kaskade (ab v0.4.26):** Erkennt zeitlich gestaffelte Böen (weit weg → nah). Vorwarnung ohne Konsens. Nur Böen der letzten 60 Minuten werden berücksichtigt (WIND_KASKADE_FENSTER = 6 × 10 min).
+Diese Topics zeigen sofort welche Quelle den Alarm ausgelöst hat:
 
-**Regen-Buffer (ab v0.4.27):** `regen_upstream` prüft nur die letzten 30 Minuten im Buffer (REGEN_PUFFER_FENSTER = 3 × 10 min). Verhindert dass Regen der vor Stunden gefallen ist noch stundenlang `regen_upstream=1` zeigt.
-
-**Lokal-Regen (ab v0.4.25/v0.4.28):** Stationen innerhalb des konfigurierten Lokal-Umkreises (Standard: 25 km) werden unabhängig von der Windrichtung auf aktuellen Regen geprüft. Stationen zwischen 25–40 km erscheinen im Info-Log, lösen aber keinen Alarm aus. Der Radius ist in den Einstellungen konfigurierbar.
-
-**TAWES RR-Einheit:** Die GeoSphere-API liefert Niederschlag in **mm/10min**. Das Plugin rechnet intern auf **mm/h** um (× 6). Der konfigurierte REGEN_ALARM gilt immer in mm/h. Beispiel: Station zeigt 5.0 mm/10min = 30 mm/h.
-
-### Alarm-Diagnose-Topics
-
-Ab v0.4.27/v0.4.28 gibt es zwei neue Topics die sofort zeigen welche Quelle den Alarm ausgelöst hat, ohne Log-Analyse:
-
-- `alarm/wind_quelle`: z.B. `INCA (52km/h)`, `TAWES_STURM (65km/h)`, `TAWES_KASKADE`, `ZAMG`, `–`
-- `alarm/regen_quelle`: z.B. `INCA (3.5mm/h)`, `TAWES_UPSTREAM (12mm/h)`, `TAWES_LOKAL (VÖCKLABRUCK 8km 31.8mm/h)`, `ZAMG`, `–`
-
-### Notification-Gate und Deduplizierung
-
-- `notification/inca`, `notification/tawes`, `notification/alle`: nur bei `alarm/gesamt ≥ 1`
-- Wird nur publiziert wenn sich der Inhalt ändert (kein Spam)
-- Bei `alarm = 0`: leerer String → löscht retained Message im Broker
-- `notification/alle` enthält keine "kein Alarm"-Fallback-Texte wenn nur TAWES/ZAMG Alarm aktiv ist (ab v0.4.28)
+- `alarm/wind_quelle`: z.B. `INCA (52km/h)`, `INCA+TAWES (48→85km/h)`, `TAWES_STURM`, `ZAMG`
+- `alarm/regen_quelle`: z.B. `INCA+TAWES (0.5→8.2mm/h)`, `TAWES_UP (12mm/h)`, `ZAMG`
+- `alarm/konfidenz`: z.B. `75` (Sicherheit: hoch)
+- `alarm/eta_min`: z.B. `12` (Regen in 12 Minuten)
+- `alarm/regen_trend`: `stark_zunehmend`, `zunehmend`, `stabil`, `abnehmend`
 
 ---
 
 ## FAQ
 
+**Warum wird manchmal Stufe 3 angezeigt obwohl es noch nicht regnet?**
+Das ist korrekt und gewollt. Das Plugin berechnet die Stufe aus dem Spitzenwert der nächsten 30 Minuten (nicht nur dem aktuellen Wert) – aber nur wenn TAWES oder ZAMG das bestätigen. So erhältst du die richtige Warnstufe mit Vorlaufzeit, bevor der Starkregen ankommt.
+
+**Warum sehe ich manchmal Stufe 1 obwohl die Schwelle nicht überschritten wurde?**
+Bei einem ETA-Signal (Regen kommt in X Minuten laut INCA) und gleichzeitiger TAWES-Bestätigung ist Stufe 1 als Vorwarnung korrekt – auch wenn der aktuelle Messwert unter der Schwelle liegt. Die Schwelle bestimmt ab wann Stufe 2 und 3 ausgelöst werden.
+
+**Warum ist alarm/konfidenz manchmal gering?**
+Wenn nur INCA ein Signal zeigt (keine TAWES-Bestätigung, keine ZAMG-Warnung) ist die Konfidenz naturgemäß niedrig. Das ist das System das korrekt funktioniert – einzelne Quellen werden skeptisch behandelt.
+
 **Warum löst eine einzelne Wetterstation einen Wind-Alarm aus?**
-Sollte seit v0.4.26 nicht mehr passieren. TAWES benötigt Konsens (min. 2 Stationen, 30% der Upstream-Tal-Stationen). Prüfe `alarm/wind_quelle`: wenn dort `INCA (Xkm/h)` steht kommt der Alarm vom Nowcast-Modell – das braucht keinen Konsens.
+Prüfe `alarm/wind_quelle`. Wenn dort `INCA (Xkm/h)` steht, kommt der Alarm vom Nowcast-Modell – das braucht keinen Stations-Konsens. Wenn es `TAWES_STURM` ist: TAWES benötigt mind. 2 Stationen und 30% der Upstream-Stationen.
 
 **Regen-Alarm obwohl kein Regen sichtbar?**
-Prüfe `alarm/regen_quelle`. `TAWES_LOKAL (Station 28km ...)` bedeutet eine Station im Lokal-Umkreis hat starken Regen gemeldet. Lokal-Umkreis in den Einstellungen verkleinern (Standard 25 km) oder REGEN_ALARM erhöhen.
+Prüfe `alarm/regen_quelle`. `TAWES_LOK (Station 12km ...)` bedeutet eine Station im Lokal-Umkreis hat Regen gemeldet. Lokal-Umkreis in den Einstellungen verkleinern oder REGEN_ALARM erhöhen.
 
-**Warum ist regen_eta_min = -1?**
-Für die ETA-Berechnung braucht man mind. 2 Stationen mit Regen in den letzten 30 Minuten. Bei nur einer Station oder ohne Daten im 30-min-Fenster bleibt der Wert -1.
-
-**Was ist der Unterschied ZAMG vs. alarm/?**
-ZAMG-Warnungen sind offizielle, oft Stunden im Voraus ausgegebene Warnungen. Die `alarm/`-Topics kombinieren ZAMG + INCA + TAWES und können auch kurzfristig ohne aktive ZAMG-Warnung anspringen (z.B. bei lokalem Starkregen laut TAWES).
+**Was bedeutet notification/tageswarnung?**
+Wenn ZAMG Warnungen für die nächsten 8 Stunden hat, erscheint dort eine Zusammenfassung. Ideal für eine Loxone Morgenroutine (Zeitprogramm 07:00) damit du beim Aufstehen weißt ob heute Unwetter kommen.
 
 ---
 
@@ -475,7 +472,7 @@ Dieses Plugin nutzt ausschließlich öffentlich zugängliche Daten von [GeoSpher
 
 Geocoding via [Nominatim / OpenStreetMap](https://nominatim.org) (kostenlos, kein API-Key nötig).
 
-**Haftungsausschluss:** Die Daten dienen der Information und Hausautomation. Für die Richtigkeit der Wettervorhersagen und daraus resultierende automatisierte Handlungen wird keine Haftung übernommen. Bei Sturm, Unwetter oder Extremereignissen zählen immer die aktuellen Meldungen der Behörden.
+**Haftungsausschluss:** Die Daten dienen der Information und Hausautomation. Für die Richtigkeit der Wettervorhersagen und daraus resultierende automatisierte Handlungen wird keine Haftung übernommen. Bei Unwetter oder Extremereignissen zählen immer die aktuellen Meldungen der Behörden.
 
 ---
 
