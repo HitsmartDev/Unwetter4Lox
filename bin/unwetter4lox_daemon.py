@@ -123,8 +123,8 @@ if not _lat_raw or not _lon_raw:
     log.critical('STANDORT NICHT KONFIGURIERT!')
     sys.exit(1)
 
-LAT          = float(_lat_raw)
-LON          = float(_lon_raw)
+LAT          = float(_lat_raw.replace(',', '.'))
+LON          = float(_lon_raw.replace(',', '.'))
 INTERVAL       = int(get_cfg('SCHEDULE', 'INTERVAL',       '300'))
 # Per-API-Intervalle: Fallback auf INTERVAL wenn nicht konfiguriert
 ZAMG_INTERVAL  = max(60,  min(3600, int(get_cfg('SCHEDULE', 'ZAMG_INTERVAL',  str(INTERVAL)))))
@@ -505,7 +505,7 @@ def _canon_sid(x):
 
 def _parse_iso(ts):
     """Sicherer ISO-Parser ohne fromisoformat."""
-    if not ts: return int(time.time())
+    if not ts: return 0  # 0 → caller setzt Fallback (e_ep = s_ep + 86400)
     try:
         s = ts.replace('Z', '').split('+')[0].replace('T', ' ')
         for f in ['%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M']:
@@ -688,7 +688,8 @@ WARN_TYPES_FULL = {1:'wind', 2:'regen', 3:'schnee', 4:'glatteis', 5:'gewitter', 
 _STUFE_FARBE    = {1:'⚠️ GELB', 2:'🟠 ORANGE', 3:'🔴 ROT', 4:'🟣 LILA'}
 
 def fetch_zamg():
-    url  = f'https://warnungen.zamg.at/wsapp/api/getWarningsForCoords?lat={LAT}&lon={LON}&lang={LBLANG}'
+    url  = f'https://warnungen.zamg.at/wsapp/api/getWarningsForCoords?lat={LAT:.6f}&lon={LON:.6f}&lang={LBLANG}'
+    log.debug(f'ZAMG URL: {url}')
     data = fetch_json(url, 'ZAMG')
     if data is None: return None
     now_ts = int(time.time())
@@ -696,6 +697,8 @@ def fetch_zamg():
     if not raw:
         for k in ('items', 'data', 'Warnings'):
             if k in data: raw = data[k]; break
+    if not raw:
+        log.debug(f'ZAMG: Leere Antwort – API-Keys: {list(data.keys())[:10]}')
     result = {wt: {'stufe':0,'aktiv':0,'bald':0,'tageswarnung':0,'start_epoch':0,'end_epoch':0,'notification':''} for wt in WARN_TYPES_FULL.values()}
     max_stufe = 0; akut = 0; irgendwas = 0; warn_texts = []; tages_texts = []
     # Tageswarnung-Horizont: bis zu 8 Stunden voraus (für Morgeninfo im notification/tageswarnung)
@@ -761,7 +764,7 @@ def fetch_inca():
     _base = 'https://dataset.api.hub.geosphere.at/v1/timeseries/forecast/nowcast-v1-15min-1km'
 
     def _req(param):
-        url = f'{_base}?lat_lon={LAT}%2C{LON}&parameters={param}&output_format=geojson'
+        url = f'{_base}?lat_lon={LAT:.6f}%2C{LON:.6f}&parameters={param}&output_format=geojson'
         return fetch_json(url, f'INCA {param}')
 
     # Alle 4 API-Calls gleichzeitig starten
@@ -1276,6 +1279,7 @@ def run():
     except Exception: pass
 
     log.info(f'Unwetter4Lox v0.9.20 gestartet | ZAMG={ZAMG_INTERVAL}s INCA={INCA_INTERVAL}s TAWES={TAWES_INTERVAL}s Loop={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID} | Upstream=±{TAWES_UPSTREAM_WINKEL}°')
+    log.info(f'Standort: LAT={LAT:.6f} LON={LON:.6f}')
     try:
         with open(PID_FILE, 'w') as f: f.write(str(my_pid))
     except: pass

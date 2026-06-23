@@ -32,9 +32,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $inca_en    = isset($_POST['inca_enabled'])  ? '1' : '0';
     $tawes_en   = isset($_POST['tawes_enabled']) ? '1' : '0';
 
+    // Koordinaten: Komma als Dezimaltrennzeichen normalisieren (österr. Eingabe),
+    // number_format erzwingt Punkt unabhängig von PHP-Locale (LC_NUMERIC).
+    $lat = (float)str_replace(',', '.', trim($_POST['lat'] ?? '0'));
+    $lon = (float)str_replace(',', '.', trim($_POST['lon'] ?? '0'));
     $c  = "[LOCATION]\n";
-    $c .= "LAT="          . floatval($_POST['lat'])  . "\n";
-    $c .= "LON="          . floatval($_POST['lon'])  . "\n";
+    $c .= "LAT="          . number_format($lat, 6, '.', '') . "\n";
+    $c .= "LON="          . number_format($lon, 6, '.', '') . "\n";
     $c .= "NAME="         . strip_tags(trim($_POST['name']         ?? 'Mein Zuhause'))    . "\n\n";
     
     $c .= "[MQTT]\n";
@@ -58,8 +62,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $c .= "INCA_INTERVAL="  . max(60, min(3600, intval($_POST['inca_interval']  ?? 300))) . "\n";
     $c .= "TAWES_INTERVAL=" . max(120,min(3600, intval($_POST['tawes_interval'] ?? 480))) . "\n\n";
     $c .= "[THRESHOLDS]\n";
-    $c .= "BOEN_ALARM="  . floatval($_POST['boen_alarm']  ?? 60)  . "\n";
-    $c .= "REGEN_ALARM=" . floatval($_POST['regen_alarm'] ?? 2.0) . "\n\n";
+    $c .= "BOEN_ALARM="  . number_format((float)str_replace(',', '.', $_POST['boen_alarm']  ?? '60'),  1, '.', '') . "\n";
+    $c .= "REGEN_ALARM=" . number_format((float)str_replace(',', '.', $_POST['regen_alarm'] ?? '2.0'), 1, '.', '') . "\n\n";
     $c .= "[NOTIFICATIONS]\nMIN_STUFE=" . max(1, min(4, intval($_POST['min_stufe'] ?? 1))). "\n\n";
 
     $c .= "[TAWES]\n";
