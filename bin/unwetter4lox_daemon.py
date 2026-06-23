@@ -454,9 +454,32 @@ def publish(topic, value, retain=True):
         return False
 
 def fetch_json(url, provider):
+    log.debug(f'[{provider}] → GET {url}')
     try:
         req = urllib.request.Request(url, headers={'User-Agent': 'Unwetter4Lox/0.9.4'})
-        with urllib.request.urlopen(req, timeout=15) as r: return json.loads(r.read().decode())
+        with urllib.request.urlopen(req, timeout=15) as r:
+            raw = r.read().decode()
+            data = json.loads(raw)
+            # Kompakte Debug-Zusammenfassung der Antwort (kein Dump des vollen JSON)
+            try:
+                if isinstance(data, dict):
+                    keys = list(data.keys())[:8]
+                    summary = f'dict keys={keys}'
+                    if 'features' in data:
+                        summary += f' features={len(data["features"])}'
+                    if 'timestamps' in data:
+                        summary += f' timestamps={len(data["timestamps"])}'
+                    if 'properties' in data and isinstance(data['properties'], dict):
+                        if 'warnings' in data['properties']:
+                            summary += f' warnings={len(data["properties"]["warnings"])}'
+                elif isinstance(data, list):
+                    summary = f'list len={len(data)}'
+                else:
+                    summary = str(type(data))
+            except Exception:
+                summary = '(Zusammenfassung nicht möglich)'
+            log.debug(f'[{provider}] ← HTTP 200 | {summary} | {len(raw)} Bytes')
+            return data
     except urllib.error.HTTPError as e:
         body = ''
         try: body = e.read().decode('utf-8', errors='replace')[:300]
@@ -667,6 +690,9 @@ def correlate_tawes(initial_history=False):
     n_mit_daten = sum(1 for s in all_st if s.get('FF_kmh') is not None or s.get('FFX_kmh') is not None or s.get('RR') is not None)
     eta_log = f' | eta_physik={eta_physik}min ({eta_physik_station})' if eta_physik >= 0 else ''
     log.info(f'TAWES OK | {n_mit_daten}/{len(nearby)} Stationen aktiv | upstream={len(upstream)} (±{TAWES_UPSTREAM_WINKEL}° von {dom_wr_name}) | wind_up={w_up_kmh}km/h | regen_up={reg_up}{eta_log}')
+    # Debug: Upstream-Stationen mit Messwerten
+    for _s in upstream[:8]:
+        log.debug(f'[TAWES upstream] {_s["name"]} ({_s.get("dist_km",0):.1f}km, {_s.get("bearing_name","?")}): FF={_s.get("FF_kmh")} FFX={_s.get("FFX_kmh")} RR={_s.get("RR")} Höhe={_s.get("alt",0)}m')
     if n_mit_daten < len(nearby) // 2:
         offline = [s['name'] for s in all_st if s.get('FF_kmh') is None and s.get('FFX_kmh') is None and s.get('RR') is None]
         log.debug(f'TAWES: {len(offline)} Stationen ohne aktuelle Messwerte: {", ".join(offline[:10])}{"..." if len(offline)>10 else ""}')
@@ -689,7 +715,6 @@ _STUFE_FARBE    = {1:'⚠️ GELB', 2:'🟠 ORANGE', 3:'🔴 ROT', 4:'🟣 LILA'
 
 def fetch_zamg():
     url  = f'https://warnungen.zamg.at/wsapp/api/getWarningsForCoords?lat={LAT:.6f}&lon={LON:.6f}&lang={LBLANG}'
-    log.debug(f'ZAMG URL: {url}')
     data = fetch_json(url, 'ZAMG')
     if data is None: return None
     now_ts = int(time.time())
@@ -757,6 +782,10 @@ def fetch_zamg():
     n_active = len([t for t, v in result.items() if v['aktiv']])
     n_today  = len([t for t, v in result.items() if v['tageswarnung']])
     log.info(f'GeoSphere ZAMG: OK | {n_active} aktiv | {n_today} Tageswarnungen | max_stufe={max_stufe} | akut={akut}')
+    if n_active or n_today:
+        for typ, v in result.items():
+            if v['stufe']:
+                log.debug(f'[ZAMG] {typ}: stufe={v["stufe"]} aktiv={v["aktiv"]} bald={v["bald"]} tages={v["tageswarnung"]} | {v["notification"]}')
     notif_tages = ' | '.join(tages_texts) if tages_texts else ''
     return {**result, 'max_stufe':max_stufe, 'akutwarnung':akut, 'irgendwas_aktiv':irgendwas,
             'letzter_abruf':datetime.now().astimezone().strftime('%d.%m.%Y %H:%M:%S'),
@@ -869,6 +898,14 @@ def fetch_inca():
     rr_peak_log = res['rr_max_30min']
     peak_hint = f' (max30: {rr_peak_log})' if rr_peak_log > res['rr_jetzt'] else ''
     log.info(f'INCA OK | Böen {fx60} km/h | Regen {res["rr_jetzt"]}{peak_hint} mm/h | ETA {res["minuten_bis_regen"]}min | PT={res["pt_name"]}')
+    # Debug: erste 4 Zeitschritte jedes Parameters als Überblick
+    for _dbg_param, _dbg_key, _dbg_unit in (('ff','ff_jetzt','km/h'),('fx','fx_max_60min','km/h'),('rr','rr_jetzt','mm/h'),('pt','pt_name','')):
+        if _dbg_param not in _fehler:
+            try:
+                _vals = _raw[_dbg_param]['features'][0]['properties']['parameters'][_dbg_param]['data'][:4]
+                log.debug(f'[INCA {_dbg_param}] Zeitschritte[0..3]: {_vals} | Resultat: {res[_dbg_key]}{_dbg_unit}')
+            except Exception:
+                pass
     res.pop('_regen_idx', None)
     res['letzter_abruf'] = datetime.now().astimezone().strftime('%d.%m.%Y %H:%M:%S')
     res['_api_ok'] = True
