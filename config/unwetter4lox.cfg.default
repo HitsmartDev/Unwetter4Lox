@@ -13,6 +13,9 @@ TOPIC_PREFIX=unwetter
 
 [ZAMG]
 ENABLED=1
+# Kommagetrennte Typ-IDs: 1=Wind 2=Regen 3=Schnee 4=Glatteis 5=Gewitter 6=Hitze 7=Kaelte 8=Hagel
+# Standard: ohne Hitze (6) und Kaelte (7) – reine Komfort-Warnungen, kein Unwetter
+AKTIVE_TYPEN=1,2,3,4,5,8
 
 [INCA]
 ENABLED=1

@@ -49,8 +49,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $c .= "PASS="         . strip_tags(trim($_POST['mqtt_pass']    ?? ''))                . "\n";
     $c .= "TOPIC_PREFIX=" . strip_tags(trim($_POST['topic_prefix'] ?? 'unwetter'))        . "\n\n";
     
+    // ZAMG Warntypen: Checkboxen → kommagetrennte ID-Liste (1–8)
+    $zamg_typen_ids = [];
+    $zamg_alle_ids  = [1 => 'wind', 2 => 'regen', 3 => 'schnee', 4 => 'glatteis',
+                       5 => 'gewitter', 6 => 'hitze', 7 => 'kaelte', 8 => 'hagel'];
+    foreach ($zamg_alle_ids as $id => $name) {
+        if (isset($_POST["zamg_typ_{$id}"])) $zamg_typen_ids[] = $id;
+    }
+    // Mindestens Wind + Regen muss aktiv sein (sonst ist das Plugin sinnlos)
+    if (empty($zamg_typen_ids)) $zamg_typen_ids = [1, 2, 3, 4, 5, 8];
+    $zamg_typen_str = implode(',', $zamg_typen_ids);
+
     $c .= "[ZAMG]\n";
-    $c .= "ENABLED={$zamg_en}\n\n";
+    $c .= "ENABLED={$zamg_en}\n";
+    $c .= "AKTIVE_TYPEN={$zamg_typen_str}\n\n";
 
     $c .= "[INCA]\n";
     $c .= "ENABLED={$inca_en}\n";
@@ -179,6 +191,32 @@ $(function(){
         <option value="1" <?= ($cfg['ZAMG']['ENABLED']  ?? '1') == '1' ? 'selected' : '' ?>>Ein</option>
         <option value="0" <?= ($cfg['ZAMG']['ENABLED']  ?? '1') == '0' ? 'selected' : '' ?>>Aus</option>
     </select>
+</div>
+<?php
+// Aktive ZAMG-Typen aus Config lesen
+$zamg_typen_cfg = array_map('trim', explode(',', $cfg['ZAMG']['AKTIVE_TYPEN'] ?? '1,2,3,4,5,8'));
+$zamg_typen_info = [
+    1 => ['label' => '💨 Wind',       'title' => 'Sturmböen-Warnung'],
+    2 => ['label' => '🌧️ Regen',      'title' => 'Starkregen / Überflutung'],
+    3 => ['label' => '❄️ Schnee',      'title' => 'Starker Schneefall'],
+    4 => ['label' => '🧊 Glatteis',    'title' => 'Glatteis / Eisregen'],
+    5 => ['label' => '⚡ Gewitter',    'title' => 'Gewitter (mit/ohne Hagel)'],
+    6 => ['label' => '🌡️ Hitze',      'title' => 'Hitzewelle – standardmäßig deaktiviert'],
+    7 => ['label' => '🥶 Kälte',       'title' => 'Kälteeinbruch / Frost – standardmäßig deaktiviert'],
+    8 => ['label' => '🌨 Hagel',       'title' => 'Hagelschlag'],
+];
+?>
+<div style="margin:8px 0 4px 0; font-size:13px; font-weight:bold; color:#555">🌩️ GeoSphere Warntypen berücksichtigen</div>
+<div style="padding:4px 0 8px 0; font-size:11px; color:#888">Welche offiziellen Warnungen sollen Alarm auslösen und in Notifications erscheinen?<br>Hitze und Kälte sind Komfort-Warnungen ohne Unwettercharakter – standardmäßig deaktiviert.</div>
+<div style="display:flex; flex-wrap:wrap; gap:6px; padding:4px 0 12px 0">
+<?php foreach ($zamg_typen_info as $id => $info): ?>
+<label title="<?= htmlspecialchars($info['title']) ?>" style="display:flex;align-items:center;gap:5px;background:<?= in_array((string)$id, $zamg_typen_cfg) ? '#d4edda' : '#f8f8f8' ?>;border:1px solid <?= in_array((string)$id, $zamg_typen_cfg) ? '#28a745' : '#ccc' ?>;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px;min-width:110px;user-select:none" id="lbl_zamg_typ_<?= $id ?>">
+  <input type="checkbox" name="zamg_typ_<?= $id ?>" id="zamg_typ_<?= $id ?>" value="1"
+         <?= in_array((string)$id, $zamg_typen_cfg) ? 'checked' : '' ?>
+         onchange="var l=document.getElementById('lbl_zamg_typ_<?= $id ?>');l.style.background=this.checked?'#d4edda':'#f8f8f8';l.style.borderColor=this.checked?'#28a745':'#ccc'">
+  <?= $info['label'] ?>
+</label>
+<?php endforeach; ?>
 </div>
 <div class="ui-field-contain">
     <label for="inca_enabled"><?= $L['MAIN.INCA_ENABLED'] ?></label>

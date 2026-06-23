@@ -386,10 +386,12 @@ class TestFetchZamg(unittest.TestCase):
         self.assertEqual(r['irgendwas_aktiv'], 1)
 
     def test_hitze_stufe_2_aktiv(self):
-        with patch.object(D, 'fetch_json', return_value=self._response([
-            self._warn(warntypid=6, warnstufeid=2, start_offset=-3600, end_offset=7200)
-        ])):
-            r = D.fetch_zamg()
+        # Hitze (Typ 6) ist standardmäßig deaktiviert – für diesen Test aktivieren
+        with patch.object(D, 'ZAMG_AKTIVE_TYPEN', {1,2,3,4,5,6,7,8}):
+            with patch.object(D, 'fetch_json', return_value=self._response([
+                self._warn(warntypid=6, warnstufeid=2, start_offset=-3600, end_offset=7200)
+            ])):
+                r = D.fetch_zamg()
         self.assertEqual(r['hitze']['stufe'], 2)
         self.assertEqual(r['hitze']['aktiv'], 1)
         self.assertEqual(r['max_stufe'], 2)
@@ -405,14 +407,16 @@ class TestFetchZamg(unittest.TestCase):
     def test_alle_8_warntypen_korrekt_gemappt(self):
         typen = {1:'wind', 2:'regen', 3:'schnee', 4:'glatteis',
                  5:'gewitter', 6:'hitze', 7:'kaelte', 8:'hagel'}
-        for wtype, key in typen.items():
-            with patch.object(D, 'fetch_json', return_value=self._response([
-                self._warn(warntypid=wtype, warnstufeid=1, start_offset=-60, end_offset=3600)
-            ])):
-                r = D.fetch_zamg()
-            self.assertIsNotNone(r, f"wtype={wtype} lieferte None")
-            self.assertEqual(r[key]['stufe'], 1, f"wtype={wtype} ({key}): stufe erwartet 1")
-            self.assertEqual(r[key]['aktiv'], 1, f"wtype={wtype} ({key}): aktiv erwartet 1")
+        # Alle 8 Typen für diesen Test aktivieren (inkl. Hitze/Kälte die standardmäßig deaktiviert sind)
+        with patch.object(D, 'ZAMG_AKTIVE_TYPEN', {1,2,3,4,5,6,7,8}):
+            for wtype, key in typen.items():
+                with patch.object(D, 'fetch_json', return_value=self._response([
+                    self._warn(warntypid=wtype, warnstufeid=1, start_offset=-60, end_offset=3600)
+                ])):
+                    r = D.fetch_zamg()
+                self.assertIsNotNone(r, f"wtype={wtype} lieferte None")
+                self.assertEqual(r[key]['stufe'], 1, f"wtype={wtype} ({key}): stufe erwartet 1")
+                self.assertEqual(r[key]['aktiv'], 1, f"wtype={wtype} ({key}): aktiv erwartet 1")
 
     def test_abgelaufene_warnung_ignoriert(self):
         with patch.object(D, 'fetch_json', return_value=self._response([
@@ -440,11 +444,13 @@ class TestFetchZamg(unittest.TestCase):
         self.assertEqual(r['gewitter']['bald'],  0)
 
     def test_mehrere_warnungen_max_stufe(self):
-        with patch.object(D, 'fetch_json', return_value=self._response([
-            self._warn(warntypid=5, warnstufeid=1, start_offset=-100, end_offset=3600),
-            self._warn(warntypid=6, warnstufeid=2, start_offset=-3600, end_offset=7200),
-        ])):
-            r = D.fetch_zamg()
+        # Hitze (Typ 6) für diesen Test aktivieren
+        with patch.object(D, 'ZAMG_AKTIVE_TYPEN', {1,2,3,4,5,6,7,8}):
+            with patch.object(D, 'fetch_json', return_value=self._response([
+                self._warn(warntypid=5, warnstufeid=1, start_offset=-100, end_offset=3600),
+                self._warn(warntypid=6, warnstufeid=2, start_offset=-3600, end_offset=7200),
+            ])):
+                r = D.fetch_zamg()
         self.assertEqual(r['max_stufe'], 2)
         self.assertEqual(r['gewitter']['stufe'], 1)
         self.assertEqual(r['hitze']['stufe'], 2)
@@ -457,7 +463,7 @@ class TestFetchZamg(unittest.TestCase):
         self.assertEqual(r['akutwarnung'], 1)
 
     def test_realistische_antwort_heute(self):
-        """Reproduziert die echte API-Antwort von heute (6 Warnungen)."""
+        """Reproduziert die echte API-Antwort von heute (6 Warnungen). Hitze aktiviert für Test."""
         now = int(time.time())
         mock = {
             "type": "Feature", "geometry": {},
@@ -473,8 +479,10 @@ class TestFetchZamg(unittest.TestCase):
                  "rawinfo":{"wtype":6,"wlevel":2,"start":str(now+86400),"end":str(now+172800)}}},
             ]}
         }
-        with patch.object(D, 'fetch_json', return_value=mock):
-            r = D.fetch_zamg()
+        # Hitze für diesen Test aktivieren (standardmäßig deaktiviert)
+        with patch.object(D, 'ZAMG_AKTIVE_TYPEN', {1,2,3,4,5,6,7,8}):
+            with patch.object(D, 'fetch_json', return_value=mock):
+                r = D.fetch_zamg()
         self.assertIsNotNone(r)
         self.assertEqual(r['hitze']['stufe'],    2)
         self.assertEqual(r['hitze']['aktiv'],    1)
@@ -482,6 +490,21 @@ class TestFetchZamg(unittest.TestCase):
         self.assertEqual(r['gewitter']['aktiv'], 1)
         self.assertEqual(r['max_stufe'],         2)
         self.assertEqual(r['irgendwas_aktiv'],   1)
+
+    def test_hitze_standard_ignoriert(self):
+        """Hitze und Kälte sind standardmäßig deaktiviert (AKTIVE_TYPEN=1,2,3,4,5,8)."""
+        now = int(time.time())
+        # ZAMG_AKTIVE_TYPEN standardmäßig ohne Hitze (6) und Kälte (7)
+        with patch.object(D, 'ZAMG_AKTIVE_TYPEN', {1, 2, 3, 4, 5, 8}):
+            with patch.object(D, 'fetch_json', return_value=self._response([
+                self._warn(warntypid=6, warnstufeid=2, start_offset=-3600, end_offset=7200),
+                self._warn(warntypid=7, warnstufeid=1, start_offset=-3600, end_offset=7200),
+            ])):
+                r = D.fetch_zamg()
+        self.assertEqual(r['hitze']['stufe'],  0, 'Hitze muss ignoriert werden')
+        self.assertEqual(r['kaelte']['stufe'], 0, 'Kälte muss ignoriert werden')
+        self.assertEqual(r['max_stufe'],       0)
+        self.assertEqual(r['irgendwas_aktiv'], 0)
 
 
 # ===========================================================================

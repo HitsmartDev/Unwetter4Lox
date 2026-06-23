@@ -145,6 +145,19 @@ TAWES_MAX_UPSTREAM_HOEHE = float(get_cfg('TAWES', 'MAX_UPSTREAM_HOEHE_M', '1200'
 TAWES_REGEN_LOKAL_KM     = max(5.0, min(100.0, float(get_cfg('TAWES', 'REGEN_LOKAL_KM', '25'))))
 # Upstream-Kegel: Halbwinkel in Grad (45° = 90° Gesamtkegel; war 70° = zu breit)
 TAWES_UPSTREAM_WINKEL = max(20, min(90, int(get_cfg('TAWES', 'UPSTREAM_WINKEL_GRAD', '45'))))
+# Welche ZAMG-Warntypen sollen berücksichtigt werden (kommagetrennte Typ-IDs oder Namen)
+# Standard: alle außer Hitze (6) und Kälte (7)
+_ZAMG_TYPEN_RAW = get_cfg('ZAMG', 'AKTIVE_TYPEN', '1,2,3,4,5,8')
+_ZAMG_TYPE_MAP  = {'wind':1,'regen':2,'schnee':3,'glatteis':4,'gewitter':5,'hitze':6,'kaelte':7,'hagel':8}
+ZAMG_AKTIVE_TYPEN: set[int] = set()
+for _t in _ZAMG_TYPEN_RAW.split(','):
+    _t = _t.strip()
+    if _t.isdigit():
+        ZAMG_AKTIVE_TYPEN.add(int(_t))
+    elif _t.lower() in _ZAMG_TYPE_MAP:
+        ZAMG_AKTIVE_TYPEN.add(_ZAMG_TYPE_MAP[_t.lower()])
+if not ZAMG_AKTIVE_TYPEN:
+    ZAMG_AKTIVE_TYPEN = {1, 2, 3, 4, 5, 8}
 
 # ---------------------------------------------------------------------------
 # Trend-Engine – Zeitreihe der letzten Zyklen (Multi-Source Fusion)
@@ -750,6 +763,9 @@ def fetch_zamg():
         except: continue
         typ = WARN_TYPES_FULL.get(wtype)
         if not typ or wlevel == 0: continue
+        if wtype not in ZAMG_AKTIVE_TYPEN:
+            log.debug(f'[ZAMG] Warntyp {wtype} ({typ}) ignoriert (nicht in AKTIVE_TYPEN)')
+            continue
         # rawinfo.start/end sind Unix-Timestamps als Strings → direkt int()
         try: s_ep = int(rawinfo['start']) if rawinfo.get('start') else 0
         except: s_ep = 0
@@ -1337,6 +1353,10 @@ def run():
 
     log.info(f'Unwetter4Lox v0.9.20 gestartet | ZAMG={ZAMG_INTERVAL}s INCA={INCA_INTERVAL}s TAWES={TAWES_INTERVAL}s Loop={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID} | Upstream=±{TAWES_UPSTREAM_WINKEL}°')
     log.info(f'Standort: LAT={LAT:.6f} LON={LON:.6f}')
+    _typ_namen = {1:'wind',2:'regen',3:'schnee',4:'glatteis',5:'gewitter',6:'hitze',7:'kaelte',8:'hagel'}
+    _aktiv_str = ', '.join(_typ_namen[t] for t in sorted(ZAMG_AKTIVE_TYPEN) if t in _typ_namen)
+    _inaktiv   = [_typ_namen[t] for t in sorted(_typ_namen) if t not in ZAMG_AKTIVE_TYPEN]
+    log.info(f'ZAMG Warntypen aktiv: {_aktiv_str}' + (f' | ignoriert: {", ".join(_inaktiv)}' if _inaktiv else ''))
     try:
         with open(PID_FILE, 'w') as f: f.write(str(my_pid))
     except: pass
