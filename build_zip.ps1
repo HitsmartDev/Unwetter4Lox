@@ -7,7 +7,7 @@ if (Test-Path $zipPath) { [System.IO.File]::Delete((Join-Path $srcDir $zipPath))
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip = [System.IO.Compression.ZipFile]::Open((Join-Path $srcDir $zipPath), 'Create')
 
-$excludeDirs  = @('.git', '__pycache__', '.claude', 'node_modules')
+$excludeDirs  = @('.git', '__pycache__', '.claude', 'node_modules', 'log', '.pytest_cache')
 $excludeFiles = @('*.zip', '*.pyc', 'aimemory.md', '.gitignore', 'build_zip.ps1')
 
 Get-ChildItem -Path $srcDir -Recurse -File | ForEach-Object {
