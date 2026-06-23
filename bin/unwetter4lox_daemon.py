@@ -1,4 +1,4 @@
-"""Unwetter4Lox Daemon v0.9.19 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
+"""Unwetter4Lox Daemon v0.9.20 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math, re, traceback, socket
 from datetime import datetime, timezone, timedelta
 from collections import deque
@@ -49,14 +49,8 @@ def get_loxberry_loglevel():
 
 CURRENT_LOGLEVEL = get_loxberry_loglevel()
 
-if LB_SDK:
-    log = loxberry.log.Logger(name='Daemon', package=LBPPLUGINDIR, logdir=LOGDIR, max_log_files=7)
-    log.start()
-    LOGFILE = log.filename
-    try:
-        with open(os.path.join(LOGDIR, 'daemon.log.current'), 'w') as _f: _f.write(LOGFILE)
-    except: pass
-else:
+def _init_file_logger():
+    """Fallback-Logger: Datei + LoxBerry-Tags, kein SDK nötig."""
     class LoxBerryFormatter(logging.Formatter):
         TAG_MAP = {'DEBUG': '<DEBUG>', 'INFO': '<OK>', 'WARNING': '<WARNING>', 'ERROR': '<ERR>', 'CRITICAL': '<CRIT>'}
         def format(self, record):
@@ -64,16 +58,38 @@ else:
             ts  = datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S')
             return f'{ts} {tag} {record.getMessage()}'
     _ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-    LOGFILE = os.path.join(LOGDIR, f'daemon_{_ts}.log')
-    with open(LOGFILE, 'w', encoding='utf-8') as _f:
+    logfile = os.path.join(LOGDIR, f'daemon_{_ts}.log')
+    with open(logfile, 'w', encoding='utf-8') as _f:
         _f.write(f'{datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")} <LOGSTART> Unwetter4Lox Daemon\n')
     try:
-        with open(os.path.join(LOGDIR, 'daemon.log.current'), 'w') as _f: _f.write(LOGFILE)
+        with open(os.path.join(LOGDIR, 'daemon.log.current'), 'w') as _f: _f.write(logfile)
     except: pass
-    _fh = logging.FileHandler(LOGFILE, mode='a', encoding='utf-8')
+    # Bestehende Handler entfernen bevor basicConfig aufgerufen wird
+    root = logging.getLogger()
+    for h in root.handlers[:]: root.removeHandler(h)
+    _fh = logging.FileHandler(logfile, mode='a', encoding='utf-8')
     _fh.setFormatter(LoxBerryFormatter())
     logging.basicConfig(level=_lb_level_to_python(CURRENT_LOGLEVEL), handlers=[_fh])
-    log = logging.getLogger('unwetter4lox')
+    return logging.getLogger('unwetter4lox'), logfile
+
+_lb_log_ok = False
+if LB_SDK:
+    try:
+        log = loxberry.log.Logger(name='Daemon', package=LBPPLUGINDIR, logdir=LOGDIR, max_log_files=7)
+        log.start()
+        LOGFILE = log.filename
+        if not LOGFILE:
+            raise RuntimeError('LoxBerry Logger lieferte kein Filename – Fallback auf File-Logger')
+        try:
+            with open(os.path.join(LOGDIR, 'daemon.log.current'), 'w') as _f: _f.write(LOGFILE)
+        except: pass
+        _lb_log_ok = True
+    except Exception as _lb_exc:
+        # LB_SDK-Logging fehlgeschlagen → Fallback (kein sys.exit, Daemon läuft weiter)
+        LB_SDK = False
+
+if not _lb_log_ok:
+    log, LOGFILE = _init_file_logger()
 
 log.info(f'Logging initialisiert (Level {CURRENT_LOGLEVEL})')
 
@@ -109,7 +125,11 @@ if not _lat_raw or not _lon_raw:
 
 LAT          = float(_lat_raw)
 LON          = float(_lon_raw)
-INTERVAL     = int(get_cfg('SCHEDULE',       'INTERVAL',          '300'))
+INTERVAL       = int(get_cfg('SCHEDULE', 'INTERVAL',       '300'))
+# Per-API-Intervalle: Fallback auf INTERVAL wenn nicht konfiguriert
+ZAMG_INTERVAL  = max(60,  min(3600, int(get_cfg('SCHEDULE', 'ZAMG_INTERVAL',  str(INTERVAL)))))
+INCA_INTERVAL  = max(60,  min(3600, int(get_cfg('SCHEDULE', 'INCA_INTERVAL',  str(INTERVAL)))))
+TAWES_INTERVAL = max(120, min(3600, int(get_cfg('SCHEDULE', 'TAWES_INTERVAL', '480'))))
 BOEN_ALARM   = float(get_cfg('THRESHOLDS',   'BOEN_ALARM',        '60'))
 REGEN_ALARM  = float(get_cfg('THRESHOLDS',   'REGEN_ALARM',       '10.0'))
 ZAMG_ENABLED   = get_cfg('ZAMG', 'ENABLED',           '1') == '1'
@@ -1255,7 +1275,7 @@ def run():
         time.sleep(1)
     except Exception: pass
 
-    log.info(f'Unwetter4Lox v0.9.19 gestartet | Interval={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID} | Upstream=±{TAWES_UPSTREAM_WINKEL}° | Trend-Engine aktiv')
+    log.info(f'Unwetter4Lox v0.9.20 gestartet | ZAMG={ZAMG_INTERVAL}s INCA={INCA_INTERVAL}s TAWES={TAWES_INTERVAL}s Loop={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID} | Upstream=±{TAWES_UPSTREAM_WINKEL}°')
     try:
         with open(PID_FILE, 'w') as f: f.write(str(my_pid))
     except: pass
@@ -1271,56 +1291,56 @@ def run():
     if not mqtt_connect():
         log.warning('MQTT: Startverbindung fehlgeschlagen – Daemon läuft weiter, Reconnect folgt im nächsten Zyklus')
 
-    first = True; last_tawes = 0
+    first = True; last_zamg = 0; last_inca = 0; last_tawes = 0
     zamg = {}; inca = {}; tawes = st.get('tawes', {}); prev_alarm = st.get('alarm', {})
 
     while True:
         try:
+            now = time.time()
+
             # --- MQTT-Status-Check ---
             # Paho's loop_start() + reconnect_delay_set() übernehmen alle Reconnects automatisch.
             # Hard Reset nach 5min Dauertrennung (z.B. Client-ID-Konflikt zweier Instanzen)
             # oder nach 30min ohne erfolgreiches Publish (Zombie-TCP-Erkennung).
             if not _mqtt_connected.is_set():
-                elapsed_disco = time.time() - _disconnect_since if _disconnect_since > 0 else 0
-                elapsed_pub   = time.time() - _last_successful_publish if _last_successful_publish > 0 else 0
+                elapsed_disco = now - _disconnect_since if _disconnect_since > 0 else 0
+                elapsed_pub   = now - _last_successful_publish if _last_successful_publish > 0 else 0
                 log.info(f'MQTT: Warte auf Verbindung (seit {elapsed_disco:.0f}s getrennt, '
                          f'letztes Publish vor {elapsed_pub:.0f}s, Reconnects: {_mqtt_reconnect_count})')
                 if elapsed_disco > 300:
-                    # 5min dauerhaft getrennt → Hard Reset (deckt Client-ID-Konflikt und Broker-Restart ab)
                     log.warning(f'MQTT: {elapsed_disco/60:.1f}min dauerhaft getrennt – Hard Reset')
                     mqtt_connect()
             elif (_last_successful_publish > 0 and
-                  (time.time() - _last_successful_publish) > MQTT_WATCHDOG_TIMEOUT):
-                # Zombie-TCP: connected-Flag gesetzt, aber seit 30min kein Publish
+                  (now - _last_successful_publish) > MQTT_WATCHDOG_TIMEOUT):
                 log.warning(
-                    f'MQTT-Watchdog: Kein Publish seit {(time.time()-_last_successful_publish)/60:.0f}min '
+                    f'MQTT-Watchdog: Kein Publish seit {(now-_last_successful_publish)/60:.0f}min '
                     f'– Hard Reset (Reconnects gesamt: {_mqtt_reconnect_count})'
                 )
                 mqtt_connect()
 
             status = 'OK'
 
-            # ZAMG – jeder Zyklus
-            if ZAMG_ENABLED:
+            # ZAMG – konfiguriertes Intervall (Standard: INTERVAL, min 60s)
+            if ZAMG_ENABLED and (first or now - last_zamg >= ZAMG_INTERVAL):
                 try:
                     new_z = fetch_zamg()
-                    if new_z and new_z.get('_api_ok'): zamg = new_z
+                    if new_z and new_z.get('_api_ok'): zamg = new_z; last_zamg = now
                     elif not new_z: status = 'ZAMG API Fehler'
                 except Exception: log.error(f'ZAMG Fehler: {traceback.format_exc()}')
 
-            # INCA – jeder Zyklus
-            if INCA_ENABLED:
+            # INCA – konfiguriertes Intervall (Standard: INTERVAL, min 60s)
+            if INCA_ENABLED and (first or now - last_inca >= INCA_INTERVAL):
                 try:
                     new_i = fetch_inca()
-                    if new_i and new_i.get('_api_ok'): inca = new_i
+                    if new_i and new_i.get('_api_ok'): inca = new_i; last_inca = now
                     elif not new_i and status == 'OK': status = 'INCA API Fehler'
                 except Exception: log.error(f'INCA Fehler: {traceback.format_exc()}')
 
-            # TAWES – alle 480s
-            if TAWES_ENABLED and (first or time.time() - last_tawes > 480):
+            # TAWES – konfiguriertes Intervall (Standard: 480s, min 120s)
+            if TAWES_ENABLED and (first or now - last_tawes >= TAWES_INTERVAL):
                 try:
                     new_t = correlate_tawes(initial_history=first)
-                    if new_t.get('_api_ok', True): tawes = new_t; last_tawes = time.time()
+                    if new_t.get('_api_ok', True): tawes = new_t; last_tawes = now
                     elif status == 'OK': status = 'TAWES API Fehler'
                 except Exception: log.error(f'TAWES Fehler: {traceback.format_exc()}')
 

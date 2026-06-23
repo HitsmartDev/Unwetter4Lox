@@ -52,7 +52,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $c .= "ENABLED={$inca_en}\n";
     $c .= "HORIZON_MINUTES=" . max(15, min(60, intval($_POST['inca_horizon'] ?? 60)))     . "\n\n";
 
-    $c .= "[SCHEDULE]\nINTERVAL=" . max(60, intval($_POST['interval'] ?? 300))            . "\n\n";
+    $c .= "[SCHEDULE]\n";
+    $c .= "INTERVAL="       . max(60, min(3600, intval($_POST['interval']       ?? 300))) . "\n";
+    $c .= "ZAMG_INTERVAL="  . max(60, min(3600, intval($_POST['zamg_interval']  ?? 300))) . "\n";
+    $c .= "INCA_INTERVAL="  . max(60, min(3600, intval($_POST['inca_interval']  ?? 300))) . "\n";
+    $c .= "TAWES_INTERVAL=" . max(120,min(3600, intval($_POST['tawes_interval'] ?? 480))) . "\n\n";
     $c .= "[THRESHOLDS]\n";
     $c .= "BOEN_ALARM="  . floatval($_POST['boen_alarm']  ?? 60)  . "\n";
     $c .= "REGEN_ALARM=" . floatval($_POST['regen_alarm'] ?? 2.0) . "\n\n";
@@ -357,15 +361,46 @@ INCA (Integrated Nowcasting through Comprehensive Analysis) ist ein hochauflöse
 </p>
 </div>
 
-<!-- ABRUF-INTERVALL & ALARMSCHWELLEN -->
+<!-- ABRUF-INTERVALLE & ALARMSCHWELLEN -->
 <div data-role="collapsible" data-collapsed="true" data-theme="a" data-content-theme="a">
-<h3>⚙️ <?= $L['MAIN.INTERVAL'] ?> & Alarmschwellen</h3>
+<h3>⚙️ Abruf-Intervalle & Alarmschwellen</h3>
+<p style="font-size:11px;color:#888;margin:4px 0 8px 0">
+Jede Datenquelle kann separat konfiguriert werden. Der <b>Loop-Takt</b> bestimmt den Rhythmus des Daemons – die API-Intervalle entscheiden wann jede Quelle tatsächlich abgefragt wird.<br>
+ZAMG/INCA werden bei jedem Abruf frisch geladen. TAWES läuft unabhängig (Minimum 2 Minuten – API liefert Daten im 10-Minuten-Takt).
+</p>
+
 <div class="sv-row">
-<label><?= $L['MAIN.INTERVAL'] ?> <span class="sv" id="siv"><?= v('SCHEDULE','INTERVAL','300') ?></span> s</label>
-<input type="range" data-role="none" id="interval" name="interval" min="60" max="900" step="30"
+<label>Loop-Takt (Haupt-Schleifen-Intervall) <span class="sv" id="siv"><?= v('SCHEDULE','INTERVAL','300') ?></span> s</label>
+<input type="range" data-role="none" id="interval" name="interval" min="60" max="600" step="30"
        value="<?= v('SCHEDULE','INTERVAL','300') ?>"
        oninput="document.getElementById('siv').textContent=this.value">
-<p class="sv-hint">Wie oft der Daemon die Wetter-APIs abfragt (Sekunden). TAWES wird immer nur alle 10 Minuten abgerufen.</p>
+<p class="sv-hint">Wie lange der Daemon zwischen zwei Zyklen wartet. Die API-Intervalle unten bestimmen wann jede Quelle tatsächlich abgerufen wird. Standard: 300 s.</p>
+</div>
+
+<hr style="opacity:0.15">
+
+<div class="sv-row">
+<label>🌩️ ZAMG-Intervall <span class="sv" id="sziv"><?= v('SCHEDULE','ZAMG_INTERVAL','300') ?></span> s</label>
+<input type="range" data-role="none" id="zamg_interval" name="zamg_interval" min="60" max="3600" step="60"
+       value="<?= v('SCHEDULE','ZAMG_INTERVAL','300') ?>"
+       oninput="document.getElementById('sziv').textContent=this.value">
+<p class="sv-hint">Wie oft offizielle Warnungen abgerufen werden. Standard: 300 s (5 min). Min: 60 s.</p>
+</div>
+
+<div class="sv-row">
+<label>🛰️ INCA-Intervall <span class="sv" id="siiv"><?= v('SCHEDULE','INCA_INTERVAL','300') ?></span> s</label>
+<input type="range" data-role="none" id="inca_interval" name="inca_interval" min="60" max="3600" step="60"
+       value="<?= v('SCHEDULE','INCA_INTERVAL','300') ?>"
+       oninput="document.getElementById('siiv').textContent=this.value">
+<p class="sv-hint">Wie oft der INCA Nowcast abgerufen wird. INCA aktualisiert sich alle 15 Minuten. Standard: 300 s. Min: 60 s.</p>
+</div>
+
+<div class="sv-row">
+<label>🌐 TAWES-Intervall <span class="sv" id="stiv"><?= v('SCHEDULE','TAWES_INTERVAL','480') ?></span> s</label>
+<input type="range" data-role="none" id="tawes_interval" name="tawes_interval" min="120" max="3600" step="60"
+       value="<?= v('SCHEDULE','TAWES_INTERVAL','480') ?>"
+       oninput="document.getElementById('stiv').textContent=this.value">
+<p class="sv-hint">Wie oft TAWES-Stationen abgefragt werden. Daten ändern sich im 10-Minuten-Takt. Standard: 480 s (8 min). Min: 120 s.</p>
 </div>
 
 <hr style="opacity:0.15">
