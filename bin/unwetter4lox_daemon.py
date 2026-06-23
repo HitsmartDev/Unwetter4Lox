@@ -1,4 +1,4 @@
-"""Unwetter4Lox Daemon v0.9.20 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
+"""Unwetter4Lox Daemon v0.9.21 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math, re, traceback, socket
 from datetime import datetime, timezone, timedelta
 from collections import deque
@@ -64,6 +64,7 @@ def _init_file_logger():
     try:
         with open(os.path.join(LOGDIR, 'daemon.log.current'), 'w') as _f: _f.write(logfile)
     except: pass
+    _make_stable_log_link(logfile)
     # Bestehende Handler entfernen bevor basicConfig aufgerufen wird
     root = logging.getLogger()
     for h in root.handlers[:]: root.removeHandler(h)
@@ -71,6 +72,16 @@ def _init_file_logger():
     _fh.setFormatter(LoxBerryFormatter())
     logging.basicConfig(level=_lb_level_to_python(CURRENT_LOGLEVEL), handlers=[_fh])
     return logging.getLogger('unwetter4lox'), logfile
+
+def _make_stable_log_link(target_path):
+    """Erstellt daemon.log als Symlink auf die aktuelle Session-Log-Datei.
+    Ermöglicht LoxBerry logmanager.cgi stabile Pfad-Registrierung."""
+    try:
+        stable = os.path.join(LOGDIR, 'daemon.log')
+        if os.path.exists(stable) or os.path.islink(stable):
+            os.unlink(stable)
+        os.symlink(target_path, stable)
+    except: pass
 
 _lb_log_ok = False
 if LB_SDK:
@@ -83,6 +94,7 @@ if LB_SDK:
         try:
             with open(os.path.join(LOGDIR, 'daemon.log.current'), 'w') as _f: _f.write(LOGFILE)
         except: pass
+        _make_stable_log_link(LOGFILE)
         _lb_log_ok = True
     except Exception as _lb_exc:
         # LB_SDK-Logging fehlgeschlagen → Fallback (kein sys.exit, Daemon läuft weiter)
@@ -1351,7 +1363,7 @@ def run():
         time.sleep(1)
     except Exception: pass
 
-    log.info(f'Unwetter4Lox v0.9.20 gestartet | ZAMG={ZAMG_INTERVAL}s INCA={INCA_INTERVAL}s TAWES={TAWES_INTERVAL}s Loop={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID} | Upstream=±{TAWES_UPSTREAM_WINKEL}°')
+    log.info(f'Unwetter4Lox v0.9.21 gestartet | ZAMG={ZAMG_INTERVAL}s INCA={INCA_INTERVAL}s TAWES={TAWES_INTERVAL}s Loop={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID} | Upstream=±{TAWES_UPSTREAM_WINKEL}°')
     log.info(f'Standort: LAT={LAT:.6f} LON={LON:.6f}')
     _typ_namen = {1:'wind',2:'regen',3:'schnee',4:'glatteis',5:'gewitter',6:'hitze',7:'kaelte',8:'hagel'}
     _aktiv_str = ', '.join(_typ_namen[t] for t in sorted(ZAMG_AKTIVE_TYPEN) if t in _typ_namen)

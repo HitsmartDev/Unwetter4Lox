@@ -10,7 +10,11 @@ $navbar[3]['Name'] = $L['MAIN.LOG'];       $navbar[3]['URL'] = "log.php"; $navba
 $navbar[4]['Name'] = $L['MAIN.HELP'];      $navbar[4]['URL'] = "help.php";
 
 # Alle Log-Dateien nach Änderungszeit sortiert (neueste zuerst)
-$allsessions = glob($lbplogdir . '/*.log') ?: [];
+# daemon.log ist nur ein Symlink auf die aktuelle Session → aus der Liste ausschließen
+$allsessions = array_values(array_filter(
+    glob($lbplogdir . '/*.log') ?: [],
+    fn($f) => basename($f) !== 'daemon.log'
+));
 usort($allsessions, function($a, $b) { return filemtime($b) - filemtime($a); });
 
 # Pointer-Datei hat Vorrang für "aktuell"

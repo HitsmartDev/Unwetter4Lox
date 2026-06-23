@@ -149,9 +149,9 @@ if [ -f "${DAEMONSCRIPT}" ]; then
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 
-@reboot root sleep 120 && ${DAEMONSCRIPT} restart >/dev/null 2>&1
-0 3 * * * root ${DAEMONSCRIPT} restart >/dev/null 2>&1
-*/5 * * * * root if [ -f "${PIDFILE}" ] && ! kill -0 "\$(cat ${PIDFILE})" 2>/dev/null; then rm -f "${PIDFILE}" "${STATEFILE}"; ${DAEMONSCRIPT} start >/dev/null 2>&1; fi
+@reboot root sleep 120 && runuser -u loxberry -- ${DAEMONSCRIPT} restart >/dev/null 2>&1
+0 3 * * * root runuser -u loxberry -- ${DAEMONSCRIPT} restart >/dev/null 2>&1
+*/5 * * * * root if [ -f "${PIDFILE}" ] && ! kill -0 "\$(cat ${PIDFILE})" 2>/dev/null; then rm -f "${PIDFILE}" "${STATEFILE}"; runuser -u loxberry -- ${DAEMONSCRIPT} start >/dev/null 2>&1; fi
 CRONEOF
     chmod 0644 "${CROND}"
     chown root:root "${CROND}" 2>/dev/null
