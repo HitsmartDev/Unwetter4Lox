@@ -512,7 +512,7 @@ def _parse_iso(ts):
             try: return int(datetime.strptime(s, f).replace(tzinfo=timezone.utc).timestamp())
             except: continue
     except: pass
-    return int(time.time())
+    return 0  # ungültig → 0, nicht time.time() (würde Zeitfenster-Checks verfälschen)
 
 def load_tawes_stations():
     global _tawes_all_stations
@@ -738,7 +738,7 @@ def fetch_zamg():
         is_soon  = not is_act and 0 < (s_ep - now_ts) <= 1800
         is_today = not is_act and not is_soon and 0 < (s_ep - now_ts) <= TAGES_HORIZONT
         if not (is_act or is_soon or is_today): continue
-        if p.get('akutwarnung', p.get('gwa', p.get('isGWA', 0))): akut = 1
+        if p.get('akutwarnung', rawinfo.get('gwa', p.get('gwa', p.get('isGWA', 0)))): akut = 1
         if wlevel > result[typ]['stufe']:
             result[typ]['stufe'] = wlevel; result[typ]['start_epoch'] = s_ep; result[typ]['end_epoch'] = e_ep
         result[typ]['aktiv']       = max(result[typ]['aktiv'],       int(is_act))

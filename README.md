@@ -1,6 +1,6 @@
 # Unwetter4Lox
 
-**LoxBerry-Plugin für automatische Unwettererkennung und Wetterautomatisierung.**
+**LoxBerry-Plugin für automatische Unwettererkennung und Wetterautomatisierung. Version 0.9.20**
 
 Unwetter4Lox kombiniert drei offizielle österreichische Wetterdatenquellen der GeoSphere Austria und berechnet daraus einen einheitlichen Alarmstatus mit bis zu 30 Minuten Vorlaufzeit. Alle Daten werden via MQTT an den Loxone Miniserver geliefert – ein einziger Wert pro Kategorie reicht für zuverlässige Automatisierungen.
 
@@ -324,7 +324,10 @@ Textmeldungen für Push-Benachrichtigungen in lesbarem Deutsch – kein technisc
 | TAWES Upstream-Winkel | 45 ° | Halbwinkel des Upstream-Kegels (45° = 90° Gesamtkegel) |
 | TAWES Max. Seehöhe Upstream | 1200 m | Alpine Stationen über dieser Seehöhe ausgeschlossen |
 | TAWES Lokal-Regen Umkreis | 25 km | Umkreis für Lokal-Regen-Erkennung |
-| Abruf-Intervall | 300 s | Wie oft Daten abgerufen werden |
+| Loop-Takt | 300 s | Interne Prüffrequenz (wie oft der Daemon die Intervalle prüft) |
+| ZAMG Abruf-Intervall | 300 s | Wie oft die ZAMG-Warnungen abgerufen werden (min. 60 s) |
+| INCA Abruf-Intervall | 300 s | Wie oft der INCA Nowcast abgerufen wird (min. 60 s) |
+| TAWES Abruf-Intervall | 480 s | Wie oft TAWES-Stationen abgefragt werden (min. 120 s) |
 | **Böen-Alarmschwelle** | **60 km/h** | Stufe 1 ab 60 km/h, Stufe 2 ab 120, Stufe 3 ab 180 |
 | **Regen-Alarmschwelle** | **10.0 mm/h** | Stufe 1 ab 10, Stufe 2 ab 20, Stufe 3 ab 30 mm/h |
 | Min. Warnstufe für Notifications | 1 | Ab welcher ZAMG-Stufe Notification-Text erzeugt wird |
@@ -413,6 +416,8 @@ Nachricht: notification/alle
 **Täglicher Neustart:** Täglich um 03:00 Uhr wird der Daemon automatisch neu gestartet. Dies bereinigt potenzielle MQTT-Langzeitprobleme.
 
 **Watchdog (alle 5 min):** Ein Cron-Job prüft ob der Daemon noch läuft. Bei einem Absturz werden PID-Datei und state.json gelöscht und der Daemon neu gestartet.
+
+**Log-Historie:** Bei jedem Daemon-Start wird eine neue Log-Datei angelegt (Zeitstempel im Dateinamen). Im Log-Tab sind alle vergangenen Sitzungen der letzten 7 Tage auswählbar – so gehen Logs bei einem Neustart nicht verloren.
 
 **MQTT-Robustheit:** paho-mqtt `loop_start()` + `reconnect_delay_set(5s, 60s)` sorgen für automatische Wiederverbindung. Die Client-ID enthält den Hostnamen um Konflikte bei mehreren Instanzen zu vermeiden. Ein Watchdog erkennt Zombie-TCP-Verbindungen nach 30 Minuten.
 

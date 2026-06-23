@@ -535,12 +535,24 @@ code { background:#f0f0f0; padding:1px 4px; border-radius:3px; font-size:10px; f
 
 <div data-role="collapsible" data-collapsed="true">
 <h4>Wie oft werden die Daten aktualisiert?</h4>
-<p>Konfigurierbar (Standard: 300 Sekunden = 5 Minuten). TAWES-Stationsdaten werden alle 8–10 Minuten abgerufen (GeoSphere API-Intervall).</p>
+<p>Jede API kann <b>unabhängig konfiguriert</b> werden (Einstellungen → Abruf-Intervalle):</p>
+<ul style="font-size:12px">
+    <li><b>ZAMG:</b> Standard 300 s (5 min), Minimum 60 s – ZAMG-Warnungen ändern sich selten</li>
+    <li><b>INCA:</b> Standard 300 s (5 min), Minimum 60 s – Nowcast alle 15 min aktualisiert</li>
+    <li><b>TAWES:</b> Standard 480 s (8 min), Minimum 120 s – Stationsdaten alle 10 min verfügbar</li>
+</ul>
+<p>Der Loop-Takt (Standard: 300 s) gibt an, wie oft der Daemon intern prüft ob ein API-Abruf fällig ist. Einzelne APIs können so kürzer als der Loop-Takt laufen, indem Loop-Takt kleiner als die API-Intervalle gesetzt wird.</p>
 </div>
 
 <div data-role="collapsible" data-collapsed="true">
 <h4>Warum ist alarm/eta_min = -1?</h4>
 <p>-1 bedeutet, keine der drei ETA-Quellen konnte eine zuverlässige Schätzung liefern: INCA sieht keinen bevorstehenden Regen, der Trend hat noch zu wenige Zyklen, und keine Upstream-Station meldet Regen. Das ist normal wenn es wirklich keinen Regen in Sicht gibt.</p>
+</div>
+
+<div data-role="collapsible" data-collapsed="true">
+<h4>Wo finde ich ältere Logs nach einem Daemon-Neustart?</h4>
+<p>Bei jedem Daemon-Start wird eine neue Log-Datei mit Zeitstempel erstellt. Der Log-Tab zeigt alle verfügbaren Sitzungen der letzten 7 Tage in einer Liste. Klicke auf eine ältere Sitzung um das Log des früheren Starts zu öffnen.</p>
+<p>Logs werden automatisch nach 7 Sitzungen gelöscht – so ist die Fehlersuche nach einem unerwarteten Neustart trotzdem möglich.</p>
 </div>
 
 <div data-role="collapsible" data-collapsed="true">
