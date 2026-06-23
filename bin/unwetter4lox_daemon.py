@@ -610,7 +610,7 @@ def correlate_tawes(initial_history=False):
     sin_sum = cos_sum = 0.0; wr_count = 0
     for sid, v in raw.items():
         ff, dd = v.get('FF'), v.get('DD')
-        if ff and dd and ff > 1.0: rad = math.radians(dd); sin_sum += math.sin(rad)*ff; cos_sum += math.cos(rad)*ff; wr_count += 1
+        if ff is not None and dd is not None and ff > 1.0: rad = math.radians(dd); sin_sum += math.sin(rad)*ff; cos_sum += math.cos(rad)*ff; wr_count += 1
     dom_wr = (math.degrees(math.atan2(sin_sum, cos_sum)) + 360) % 360 if wr_count > 0 else 0.0
     dom_wr_name = _bearing_to_name(dom_wr) if wr_count > 0 else '–'
     upstream, all_st = [], []
@@ -693,27 +693,47 @@ def fetch_zamg():
     data = fetch_json(url, 'ZAMG')
     if data is None: return None
     now_ts = int(time.time())
-    raw = data.get('warnings', data.get('features', []))
+
+    # API-Antwort: {"type":"Feature","properties":{"location":{...},"warnings":[...]}}
+    # Warnungen sind in data['properties']['warnings'] – NICHT in data['warnings']!
+    raw = []
+    if isinstance(data, dict):
+        raw = data.get('properties', {}).get('warnings', [])
+        if not raw:  # Fallback für alte/alternative Formate
+            raw = data.get('warnings', data.get('features', []))
+            if not raw:
+                for k in ('items', 'data', 'Warnings'):
+                    if k in data: raw = data[k]; break
     if not raw:
-        for k in ('items', 'data', 'Warnings'):
-            if k in data: raw = data[k]; break
-    if not raw:
-        log.debug(f'ZAMG: Leere Antwort – API-Keys: {list(data.keys())[:10]}')
+        log.debug(f'ZAMG: Keine Warnungen in Antwort – Top-Keys: {list(data.keys())[:10]}')
+
     result = {wt: {'stufe':0,'aktiv':0,'bald':0,'tageswarnung':0,'start_epoch':0,'end_epoch':0,'notification':''} for wt in WARN_TYPES_FULL.values()}
     max_stufe = 0; akut = 0; irgendwas = 0; warn_texts = []; tages_texts = []
     # Tageswarnung-Horizont: bis zu 8 Stunden voraus (für Morgeninfo im notification/tageswarnung)
     TAGES_HORIZONT = 8 * 3600
     for w in raw:
         p = w.get('properties', w)
-        try: wtype = int(p.get('wtype', p.get('type', p.get('warningtype', 0))))
+        # rawinfo enthält wtype/wlevel + Unix-Timestamps (bevorzugt!)
+        rawinfo = p.get('rawinfo', {})
+        try:
+            wtype = int(rawinfo.get('wtype') or p.get('warntypid') or p.get('wtype') or
+                        p.get('type') or p.get('warningtype') or 0)
         except: continue
-        try: wlevel = int(p.get('wlevel', p.get('level', p.get('warninglevel', p.get('severity', 0)))))
+        try:
+            wlevel = int(rawinfo.get('wlevel') or p.get('warnstufeid') or p.get('wlevel') or
+                         p.get('level') or p.get('warninglevel') or p.get('severity') or 0)
         except: continue
         typ = WARN_TYPES_FULL.get(wtype)
         if not typ or wlevel == 0: continue
-        s_ep = _parse_iso(p.get('startzeit', p.get('validFrom', p.get('start', ''))))
-        e_ep = _parse_iso(p.get('endzeit',   p.get('validTo',   p.get('end',   ''))))
-        if e_ep == 0: e_ep = s_ep + 86400
+        # rawinfo.start/end sind Unix-Timestamps als Strings → direkt int()
+        try: s_ep = int(rawinfo['start']) if rawinfo.get('start') else 0
+        except: s_ep = 0
+        try: e_ep = int(rawinfo['end'])   if rawinfo.get('end')   else 0
+        except: e_ep = 0
+        # Fallback auf ISO-Felder
+        if not s_ep: s_ep = _parse_iso(p.get('startzeit', p.get('validFrom', p.get('start', ''))))
+        if not e_ep: e_ep = _parse_iso(p.get('endzeit',   p.get('validTo',   p.get('end',   ''))))
+        if e_ep == 0: e_ep = max(s_ep, now_ts) + 86400
         is_act   = s_ep <= now_ts <= e_ep
         is_soon  = not is_act and 0 < (s_ep - now_ts) <= 1800
         is_today = not is_act and not is_soon and 0 < (s_ep - now_ts) <= TAGES_HORIZONT
