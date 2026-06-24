@@ -1,4 +1,4 @@
-"""Unwetter4Lox Daemon v0.9.23 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
+"""Unwetter4Lox Daemon v0.9.24 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math, re, traceback, socket
 from datetime import datetime, timezone, timedelta
 from collections import deque
@@ -83,25 +83,21 @@ def _make_stable_log_link(target_path):
         os.symlink(target_path, stable)
     except: pass
 
-_lb_log_ok = False
-if LB_SDK:
-    try:
-        log = loxberry.log.Logger(name='Daemon', package=LBPPLUGINDIR, logdir=LOGDIR, max_log_files=7)
-        log.start()
-        LOGFILE = log.filename
-        if not LOGFILE:
-            raise RuntimeError('LoxBerry Logger lieferte kein Filename – Fallback auf File-Logger')
-        try:
-            with open(os.path.join(LOGDIR, 'daemon.log.current'), 'w') as _f: _f.write(LOGFILE)
-        except: pass
-        _make_stable_log_link(LOGFILE)
-        _lb_log_ok = True
-    except Exception as _lb_exc:
-        # LB_SDK-Logging fehlgeschlagen → Fallback (kein sys.exit, Daemon läuft weiter)
-        LB_SDK = False
+def _cleanup_old_sessions(max_sessions=7):
+    """Hält max. N Session-Log-Dateien, löscht ältere.
+    Eigene Rotation statt LB SDK Logger (verhindert unkontrollierten SDK-Cleanup-Thread)."""
+    pattern = os.path.join(LOGDIR, 'daemon_????????_??????.log')
+    existing = sorted(glob.glob(pattern), reverse=True)
+    for old in existing[max_sessions - 1:]:
+        try: os.remove(old)
+        except OSError: pass
 
-if not _lb_log_ok:
-    log, LOGFILE = _init_file_logger()
+# LB SDK Logger wird bewusst NICHT verwendet:
+# loxberry.log.Logger startet beim __init__ einen Background-Cleanup-Thread,
+# der nach mehreren Stunden alle *.log Dateien im LOGDIR löscht – auch unsere Fallback-Dateien.
+# Stattdessen: eigene kontrollierte Rotation + immer Fallback-File-Logger.
+_cleanup_old_sessions()
+log, LOGFILE = _init_file_logger()
 
 log.info(f'Logging initialisiert (Level {CURRENT_LOGLEVEL})')
 
@@ -111,7 +107,6 @@ def _on_signal(signum, frame):
     if os.path.exists(PID_FILE):
         try: os.remove(PID_FILE)
         except: pass
-    if LB_SDK: log.stop()
     sys.exit(0)
 
 signal.signal(signal.SIGTERM, _on_signal)
