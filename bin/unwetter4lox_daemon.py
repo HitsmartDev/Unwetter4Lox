@@ -1,4 +1,4 @@
-"""Unwetter4Lox Daemon v0.9.24 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
+"""Unwetter4Lox Daemon v0.9.25 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math, re, traceback, socket
 from datetime import datetime, timezone, timedelta
 from collections import deque
@@ -21,6 +21,10 @@ LOGDIR       = os.path.join(LBHOMEDIR, 'log',    'plugins', LBPPLUGINDIR)
 
 os.makedirs(DATADIR, exist_ok=True)
 os.makedirs(LOGDIR,  exist_ok=True)
+# Session-Log-Dateien in Unterverzeichnis – LoxBerry-Log-Manager löscht nur Dateien
+# direkt im Plugin-Log-Dir, nicht in Unterverzeichnissen.
+SESSIONDIR         = os.path.join(LOGDIR, 'sessions')
+os.makedirs(SESSIONDIR, exist_ok=True)
 STATE_FILE         = os.path.join(DATADIR, 'state.json')
 TAWES_CACHE_FILE   = os.path.join(DATADIR, 'tawes_stations.json')
 PID_FILE           = os.path.join(LOGDIR,  'daemon.pid')
@@ -50,7 +54,8 @@ def get_loxberry_loglevel():
 CURRENT_LOGLEVEL = get_loxberry_loglevel()
 
 def _init_file_logger():
-    """Fallback-Logger: Datei + LoxBerry-Tags, kein SDK nötig."""
+    """File-Logger mit LoxBerry-Tags. Session-Dateien in SESSIONDIR (Unterverzeichnis),
+    damit LoxBerry-Log-Manager sie nicht löscht."""
     class LoxBerryFormatter(logging.Formatter):
         TAG_MAP = {'DEBUG': '<DEBUG>', 'INFO': '<OK>', 'WARNING': '<WARNING>', 'ERROR': '<ERR>', 'CRITICAL': '<CRIT>'}
         def format(self, record):
@@ -58,14 +63,14 @@ def _init_file_logger():
             ts  = datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S')
             return f'{ts} {tag} {record.getMessage()}'
     _ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-    logfile = os.path.join(LOGDIR, f'daemon_{_ts}.log')
+    # Session-Datei im Unterverzeichnis – nicht im direkten Log-Dir (LoxBerry würde sie löschen)
+    logfile = os.path.join(SESSIONDIR, f'daemon_{_ts}.log')
     with open(logfile, 'w', encoding='utf-8') as _f:
         _f.write(f'{datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")} <LOGSTART> Unwetter4Lox Daemon\n')
     try:
         with open(os.path.join(LOGDIR, 'daemon.log.current'), 'w') as _f: _f.write(logfile)
     except: pass
     _make_stable_log_link(logfile)
-    # Bestehende Handler entfernen bevor basicConfig aufgerufen wird
     root = logging.getLogger()
     for h in root.handlers[:]: root.removeHandler(h)
     _fh = logging.FileHandler(logfile, mode='a', encoding='utf-8')
@@ -84,18 +89,15 @@ def _make_stable_log_link(target_path):
     except: pass
 
 def _cleanup_old_sessions(max_sessions=7):
-    """Hält max. N Session-Log-Dateien, löscht ältere.
-    Eigene Rotation statt LB SDK Logger (verhindert unkontrollierten SDK-Cleanup-Thread)."""
-    pattern = os.path.join(LOGDIR, 'daemon_????????_??????.log')
+    """Hält max. N Session-Log-Dateien in SESSIONDIR, löscht ältere."""
+    pattern = os.path.join(SESSIONDIR, 'daemon_????????_??????.log')
     existing = sorted(glob.glob(pattern), reverse=True)
     for old in existing[max_sessions - 1:]:
         try: os.remove(old)
         except OSError: pass
 
-# LB SDK Logger wird bewusst NICHT verwendet:
-# loxberry.log.Logger startet beim __init__ einen Background-Cleanup-Thread,
-# der nach mehreren Stunden alle *.log Dateien im LOGDIR löscht – auch unsere Fallback-Dateien.
-# Stattdessen: eigene kontrollierte Rotation + immer Fallback-File-Logger.
+# Eigener File-Logger mit kontrollierter Rotation.
+# LB SDK Logger wird NICHT verwendet (startet Background-Thread der Logs löscht).
 _cleanup_old_sessions()
 log, LOGFILE = _init_file_logger()
 

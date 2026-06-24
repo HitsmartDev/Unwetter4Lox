@@ -9,22 +9,13 @@ $navbar[2]['Name'] = $L['MAIN.SETTINGS'];  $navbar[2]['URL'] = "settings.php";
 $navbar[3]['Name'] = $L['MAIN.LOG'];       $navbar[3]['URL'] = "log.php"; $navbar[3]['active'] = true;
 $navbar[4]['Name'] = $L['MAIN.HELP'];      $navbar[4]['URL'] = "help.php";
 
-# --- Alle *.log Dateien im Log-Dir, dedupliziert via realpath ---
-# daemon.log ist ein Symlink auf die aktuelle Session → wird via realpath zusammengeführt
-$allsessions_raw = glob($lbplogdir . '/*.log') ?: [];
-$real_map = [];
-foreach ($allsessions_raw as $f) {
-    $real = realpath($f) ?: $f;
-    $base = basename($f);
-    if (!isset($real_map[$real])) {
-        $real_map[$real] = $f;
-    } elseif ($base !== 'daemon.log') {
-        # Echter Dateiname bevorzugen gegenüber Symlink-Name
-        $real_map[$real] = $f;
-    }
-}
-$allsessions = array_values($real_map);
-usort($allsessions, function($a, $b) { return filemtime($b) - filemtime($a); });
+# --- Session-Dateien aus sessions/ Unterverzeichnis laden ---
+# Session-Dateien liegen in sessions/ damit LoxBerry-Log-Manager sie nicht löscht.
+# daemon.log im Hauptverzeichnis ist ein Symlink auf die aktuelle Session.
+$sessdir = $lbplogdir . '/sessions';
+$allsessions_raw = glob($sessdir . '/daemon_*.log') ?: [];
+usort($allsessions_raw, function($a, $b) { return filemtime($b) - filemtime($a); });
+$allsessions = $allsessions_raw;
 
 # --- Aktuelle Session ermitteln ---
 # Priorität 1: daemon.log.current Pointer-Datei
@@ -46,7 +37,7 @@ if (!$current_log && !empty($allsessions)) $current_log = $allsessions[0];
 $raw_sess = $_GET['session'] ?? null;
 if ($raw_sess) {
     $safe_sess = preg_replace('/[^a-zA-Z0-9_\-.]/', '', basename($raw_sess));
-    $sess_path = $lbplogdir . '/' . $safe_sess;
+    $sess_path = $sessdir . '/' . $safe_sess;
     if (file_exists($sess_path)) {
         header("Location: /admin/system/tools/logfile.cgi"
             . "?logfile=" . urlencode($sess_path)
