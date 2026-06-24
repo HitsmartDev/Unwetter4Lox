@@ -12,8 +12,22 @@ $navbar[4]['Name'] = $L['MAIN.HELP'];      $navbar[4]['URL'] = "help.php";
 # --- Session-Dateien aus DATADIR laden ---
 # Log-Dateien in /data/plugins/ gespeichert – LoxBerry log_maint.pl (Stage 4) löscht
 # rekursiv alle *.log in /log/plugins/ bei Disk < 5%. DATADIR ist nicht betroffen.
-$sessdir = $lbpdatadir . '/logs';
+#
+# Robuste DATADIR-Ermittlung: $lbpdatadir ist in manchen LoxBerry-Versionen nicht gesetzt.
+# Fallback: Ableitung aus $lbpconfigdir (immer vorhanden).
+$pluginDataDir = (isset($lbpdatadir) && $lbpdatadir)
+    ? $lbpdatadir
+    : str_replace('/config/plugins/', '/data/plugins/', rtrim($lbpconfigdir, '/'));
+$sessdir = $pluginDataDir . '/logs';
+
+# Dateien aus DATADIR/logs/
 $allsessions_raw = glob($sessdir . '/Unwetter4Lox_Daemon_*.log') ?: [];
+# Fallback: auch alte LOGDIR/sessions/ prüfen (Dateien aus früheren Versionen)
+$legacydir = $lbplogdir . '/sessions';
+$allsessions_raw = array_merge(
+    $allsessions_raw,
+    glob($legacydir . '/Unwetter4Lox_Daemon_*.log') ?: []
+);
 usort($allsessions_raw, function($a, $b) { return filemtime($b) - filemtime($a); });
 $allsessions = $allsessions_raw;
 
@@ -76,7 +90,7 @@ LBWeb::lbheader($L['MAIN.TITLE'] . " – " . $L['MAIN.LOG'], "https://github.com
 <div style="text-align:center; padding:40px 0; color:#888">
     <p><?= htmlspecialchars($L['MAIN.LOG_EMPTY']) ?></p>
     <a href="index.php" data-role="button" data-inline="true" data-mini="true"><?= htmlspecialchars($L['MAIN.START_DAEMON']) ?></a>
-    <p style="font-size:11px;color:#aaa;margin-top:16px">Log-Verzeichnis: <?= htmlspecialchars($lbplogdir) ?></p>
+    <p style="font-size:11px;color:#aaa;margin-top:16px">Log-Verzeichnis: <?= htmlspecialchars($sessdir) ?></p>
 </div>
 
 <?php else: ?>

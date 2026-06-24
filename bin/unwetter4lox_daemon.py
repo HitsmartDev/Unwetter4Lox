@@ -1,4 +1,4 @@
-"""Unwetter4Lox Daemon v0.9.27 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
+"""Unwetter4Lox Daemon v0.9.28 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math, re, traceback, socket
 from datetime import datetime, timezone, timedelta
 from collections import deque
