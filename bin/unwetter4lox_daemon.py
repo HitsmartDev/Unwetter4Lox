@@ -1,4 +1,4 @@
-"""Unwetter4Lox Daemon v0.9.25 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
+"""Unwetter4Lox Daemon v0.9.26 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math, re, traceback, socket
 from datetime import datetime, timezone, timedelta
 from collections import deque
@@ -64,7 +64,7 @@ def _init_file_logger():
             return f'{ts} {tag} {record.getMessage()}'
     _ts = datetime.now().strftime('%Y%m%d_%H%M%S')
     # Session-Datei im Unterverzeichnis – nicht im direkten Log-Dir (LoxBerry würde sie löschen)
-    logfile = os.path.join(SESSIONDIR, f'daemon_{_ts}.log')
+    logfile = os.path.join(SESSIONDIR, f'Unwetter4Lox_Daemon_{_ts}.log')
     with open(logfile, 'w', encoding='utf-8') as _f:
         _f.write(f'{datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")} <LOGSTART> Unwetter4Lox Daemon\n')
     try:
@@ -90,7 +90,7 @@ def _make_stable_log_link(target_path):
 
 def _cleanup_old_sessions(max_sessions=7):
     """Hält max. N Session-Log-Dateien in SESSIONDIR, löscht ältere."""
-    pattern = os.path.join(SESSIONDIR, 'daemon_????????_??????.log')
+    pattern = os.path.join(SESSIONDIR, 'Unwetter4Lox_Daemon_????????_??????.log')
     existing = sorted(glob.glob(pattern), reverse=True)
     for old in existing[max_sessions - 1:]:
         try: os.remove(old)

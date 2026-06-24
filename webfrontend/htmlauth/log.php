@@ -13,7 +13,7 @@ $navbar[4]['Name'] = $L['MAIN.HELP'];      $navbar[4]['URL'] = "help.php";
 # Session-Dateien liegen in sessions/ damit LoxBerry-Log-Manager sie nicht löscht.
 # daemon.log im Hauptverzeichnis ist ein Symlink auf die aktuelle Session.
 $sessdir = $lbplogdir . '/sessions';
-$allsessions_raw = glob($sessdir . '/daemon_*.log') ?: [];
+$allsessions_raw = glob($sessdir . '/Unwetter4Lox_Daemon_*.log') ?: [];
 usort($allsessions_raw, function($a, $b) { return filemtime($b) - filemtime($a); });
 $allsessions = $allsessions_raw;
 
