@@ -9,19 +9,52 @@ $navbar[2]['Name'] = $L['MAIN.SETTINGS'];  $navbar[2]['URL'] = "settings.php";
 $navbar[3]['Name'] = $L['MAIN.LOG'];       $navbar[3]['URL'] = "log.php"; $navbar[3]['active'] = true;
 $navbar[4]['Name'] = $L['MAIN.HELP'];      $navbar[4]['URL'] = "help.php";
 
-# Alle Log-Dateien nach Änderungszeit sortiert (neueste zuerst)
-# daemon.log ist nur ein Symlink auf die aktuelle Session → aus der Liste ausschließen
-$allsessions = array_values(array_filter(
-    glob($lbplogdir . '/*.log') ?: [],
-    fn($f) => basename($f) !== 'daemon.log'
-));
+# --- Pointer-Datei: daemon.log.current enthält absoluten Pfad zur aktuellen Log-Datei ---
+$ptr_file    = $lbplogdir . '/daemon.log.current';
+$current_log = null;
+if (file_exists($ptr_file)) {
+    $ptr_val = trim(file_get_contents($ptr_file));
+    if ($ptr_val && file_exists($ptr_val)) $current_log = $ptr_val;
+}
+
+# Fallback: daemon.log Symlink direkt nutzen
+if (!$current_log) {
+    $stable = $lbplogdir . '/daemon.log';
+    if (file_exists($stable)) $current_log = $stable;
+}
+
+# Wenn daemon.log.current gültig → direkt zum LoxBerry Log-Viewer (überspringt Session-Liste)
+# Das funktioniert unabhängig davon welche Extension das LoxBerry SDK verwendet
+if (!isset($_GET['session']) && !isset($_GET['list']) && $current_log) {
+    $url = "/admin/system/tools/logfile.cgi"
+         . "?logfile=" . urlencode($current_log)
+         . "&package=" . urlencode($lbpplugindir)
+         . "&name=Daemon&header=html&format=template";
+    header("Location: " . $url);
+    exit;
+}
+
+# --- Session-Liste: alle *.log Dateien im Log-Dir (außer daemon.log Symlink) ---
+$allsessions_raw = glob($lbplogdir . '/*.log') ?: [];
+
+# Deduplizieren: daemon.log ist Symlink auf eine andere Session-Datei → nur echte Files
+$real_map = [];   // realpath → original path
+foreach ($allsessions_raw as $f) {
+    $real = realpath($f) ?: $f;
+    $base = basename($f);
+    # daemon.log bevorzugen wir nicht direkt, aber wir nutzen seinen realpath als Eintrag
+    if (!isset($real_map[$real])) {
+        $real_map[$real] = $f;
+    } elseif ($base !== 'daemon.log') {
+        # Echter Dateiname hat Vorrang über Symlink
+        $real_map[$real] = $f;
+    }
+}
+$allsessions = array_values($real_map);
 usort($allsessions, function($a, $b) { return filemtime($b) - filemtime($a); });
 
-# Pointer-Datei hat Vorrang für "aktuell"
-$ptr_file    = $lbplogdir . '/daemon.log.current';
-$current_log = file_exists($ptr_file) ? trim(file_get_contents($ptr_file)) : null;
-if ($current_log && !file_exists($current_log)) $current_log = null;
-if (!$current_log && !empty($allsessions))       $current_log = $allsessions[0];
+# current_log für die Session-Liste normalisieren
+if (!$current_log && !empty($allsessions)) $current_log = $allsessions[0];
 
 # Gewünschte Session aus URL-Parameter
 $raw_sess = $_GET['session'] ?? null;
@@ -29,7 +62,6 @@ if ($raw_sess) {
     $safe_sess = preg_replace('/[^a-zA-Z0-9_\-.]/', '', basename($raw_sess));
     $sess_path = $lbplogdir . '/' . $safe_sess;
     if (file_exists($sess_path)) {
-        # Direkt zum LoxBerry Log-Viewer weiterleiten
         $url = "/admin/system/tools/logfile.cgi"
              . "?logfile=" . urlencode($sess_path)
              . "&package=" . urlencode($lbpplugindir)
@@ -39,16 +71,6 @@ if ($raw_sess) {
     }
 }
 
-# Wenn nur eine Datei vorhanden → direkt weiterleiten (kein Auswahlmenü nötig)
-if (count($allsessions) === 1 && $current_log && file_exists($current_log)) {
-    $url = "/admin/system/tools/logfile.cgi"
-         . "?logfile=" . urlencode($current_log)
-         . "&package=" . urlencode($lbpplugindir)
-         . "&name=Daemon&header=html&format=template";
-    header("Location: " . $url);
-    exit;
-}
-
 LBWeb::lbheader($L['MAIN.TITLE'] . " – " . $L['MAIN.LOG'], "https://github.com/HitsmartDev/Unwetter4Lox", "");
 ?>
 
@@ -56,6 +78,7 @@ LBWeb::lbheader($L['MAIN.TITLE'] . " – " . $L['MAIN.LOG'], "https://github.com
 <div style="text-align:center; padding:40px 0; color:#888">
     <p><?= htmlspecialchars($L['MAIN.LOG_EMPTY']) ?></p>
     <a href="index.php" data-role="button" data-inline="true" data-mini="true"><?= htmlspecialchars($L['MAIN.START_DAEMON']) ?></a>
+    <p style="font-size:11px;color:#aaa;margin-top:16px">Log-Verzeichnis: <?= htmlspecialchars($lbplogdir) ?></p>
 </div>
 
 <?php else: ?>
@@ -71,13 +94,14 @@ LBWeb::lbheader($L['MAIN.TITLE'] . " – " . $L['MAIN.LOG'], "https://github.com
 
 <p style="font-size:12px;color:#555;margin:8px 4px">
     <b><?= count($allsessions) ?></b> Log-Sessions gefunden. Klicke auf eine Session um sie im LoxBerry Log-Viewer zu öffnen.
+    <a href="log.php?list=1" style="margin-left:8px;font-size:11px">↻ Aktualisieren</a>
 </p>
 
 <table class="log-list">
 <thead>
 <tr>
     <th>Session</th>
-    <th>Erstellt</th>
+    <th>Geändert</th>
     <th>Größe</th>
     <th></th>
 </tr>
@@ -86,15 +110,17 @@ LBWeb::lbheader($L['MAIN.TITLE'] . " – " . $L['MAIN.LOG'], "https://github.com
 <?php
 $idx = 0;
 foreach ($allsessions as $logfile):
-    $basename  = basename($logfile);
-    $mtime     = filemtime($logfile);
-    $size      = filesize($logfile);
-    $size_str  = $size > 1048576 ? round($size/1048576, 1) . ' MB'
-               : ($size > 1024 ? round($size/1024, 1) . ' KB' : $size . ' B');
-    $is_current = ($logfile === $current_log);
-    $date_str   = date('d.m.Y H:i:s', $mtime);
-    $sess_param = urlencode($basename);
-    $viewer_url = "log.php?session=" . $sess_param;
+    $basename    = basename($logfile);
+    $mtime       = filemtime($logfile);
+    $size        = filesize($logfile);
+    $size_str    = $size > 1048576 ? round($size/1048576, 1) . ' MB'
+                 : ($size > 1024 ? round($size/1024, 1) . ' KB' : $size . ' B');
+    $real_cur    = $current_log ? (realpath($current_log) ?: $current_log) : null;
+    $real_file   = realpath($logfile) ?: $logfile;
+    $is_current  = ($real_file === $real_cur);
+    $date_str    = date('d.m.Y H:i:s', $mtime);
+    $sess_param  = urlencode($basename);
+    $viewer_url  = "log.php?session=" . $sess_param;
     $idx++;
 ?>
 <tr>
