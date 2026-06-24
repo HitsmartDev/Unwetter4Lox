@@ -9,10 +9,10 @@ $navbar[2]['Name'] = $L['MAIN.SETTINGS'];  $navbar[2]['URL'] = "settings.php";
 $navbar[3]['Name'] = $L['MAIN.LOG'];       $navbar[3]['URL'] = "log.php"; $navbar[3]['active'] = true;
 $navbar[4]['Name'] = $L['MAIN.HELP'];      $navbar[4]['URL'] = "help.php";
 
-# --- Session-Dateien aus sessions/ Unterverzeichnis laden ---
-# Session-Dateien liegen in sessions/ damit LoxBerry-Log-Manager sie nicht löscht.
-# daemon.log im Hauptverzeichnis ist ein Symlink auf die aktuelle Session.
-$sessdir = $lbplogdir . '/sessions';
+# --- Session-Dateien aus DATADIR laden ---
+# Log-Dateien in /data/plugins/ gespeichert – LoxBerry log_maint.pl (Stage 4) löscht
+# rekursiv alle *.log in /log/plugins/ bei Disk < 5%. DATADIR ist nicht betroffen.
+$sessdir = $lbpdatadir . '/logs';
 $allsessions_raw = glob($sessdir . '/Unwetter4Lox_Daemon_*.log') ?: [];
 usort($allsessions_raw, function($a, $b) { return filemtime($b) - filemtime($a); });
 $allsessions = $allsessions_raw;

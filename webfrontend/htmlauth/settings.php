@@ -208,13 +208,26 @@ $zamg_typen_info = [
 ?>
 <div style="margin:8px 0 4px 0; font-size:13px; font-weight:bold; color:#555">🌩️ GeoSphere Warntypen berücksichtigen</div>
 <div style="padding:4px 0 8px 0; font-size:11px; color:#888">Welche offiziellen Warnungen sollen Alarm auslösen und in Notifications erscheinen?<br>Hitze und Kälte sind Komfort-Warnungen ohne Unwettercharakter – standardmäßig deaktiviert.</div>
-<div style="display:flex; flex-wrap:wrap; gap:6px; padding:4px 0 12px 0">
-<?php foreach ($zamg_typen_info as $id => $info): ?>
-<label title="<?= htmlspecialchars($info['title']) ?>" style="display:flex;align-items:center;gap:5px;background:<?= in_array((string)$id, $zamg_typen_cfg) ? '#d4edda' : '#f8f8f8' ?>;border:1px solid <?= in_array((string)$id, $zamg_typen_cfg) ? '#28a745' : '#ccc' ?>;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px;min-width:110px;user-select:none" id="lbl_zamg_typ_<?= $id ?>">
-  <input type="checkbox" name="zamg_typ_<?= $id ?>" id="zamg_typ_<?= $id ?>" value="1"
-         <?= in_array((string)$id, $zamg_typen_cfg) ? 'checked' : '' ?>
-         onchange="var l=document.getElementById('lbl_zamg_typ_<?= $id ?>');l.style.background=this.checked?'#d4edda':'#f8f8f8';l.style.borderColor=this.checked?'#28a745':'#ccc'">
-  <?= $info['label'] ?>
+<style>
+.warntyp-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; padding:4px 0 12px 0 }
+.warntyp-chip { position:relative; cursor:pointer; user-select:none }
+.warntyp-chip input[type=checkbox] { position:absolute; opacity:0; width:0; height:0 }
+.warntyp-chip span {
+    display:flex; align-items:center; justify-content:center; gap:5px;
+    border-radius:6px; padding:7px 8px; font-size:12px; font-weight:500;
+    border:2px solid #ccc; background:#f5f5f5; color:#555;
+    transition:background .15s, border-color .15s, color .15s;
+}
+.warntyp-chip input:checked + span {
+    background:#d4edda; border-color:#28a745; color:#1a5c2a;
+}
+</style>
+<div class="warntyp-grid">
+<?php foreach ($zamg_typen_info as $id => $info):
+    $checked = in_array((string)$id, $zamg_typen_cfg); ?>
+<label class="warntyp-chip" title="<?= htmlspecialchars($info['title']) ?>">
+  <input type="checkbox" name="zamg_typ_<?= $id ?>" value="1" <?= $checked ? 'checked' : '' ?> data-role="none">
+  <span><?= htmlspecialchars($info['label']) ?></span>
 </label>
 <?php endforeach; ?>
 </div>

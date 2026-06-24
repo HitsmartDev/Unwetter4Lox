@@ -1,4 +1,4 @@
-"""Unwetter4Lox Daemon v0.9.26 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
+"""Unwetter4Lox Daemon v0.9.27 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math, re, traceback, socket
 from datetime import datetime, timezone, timedelta
 from collections import deque
@@ -21,9 +21,10 @@ LOGDIR       = os.path.join(LBHOMEDIR, 'log',    'plugins', LBPPLUGINDIR)
 
 os.makedirs(DATADIR, exist_ok=True)
 os.makedirs(LOGDIR,  exist_ok=True)
-# Session-Log-Dateien in Unterverzeichnis – LoxBerry-Log-Manager löscht nur Dateien
-# direkt im Plugin-Log-Dir, nicht in Unterverzeichnissen.
-SESSIONDIR         = os.path.join(LOGDIR, 'sessions')
+# Session-Log-Dateien in DATADIR speichern – LoxBerry's log_maint.pl (Stage 4) löscht
+# rekursiv alle *.log Dateien unter /log/plugins/ bei Disk < 5%.
+# DATADIR (/data/plugins/) ist NICHT im Scan-Pfad von log_maint.pl → sicher!
+SESSIONDIR         = os.path.join(DATADIR, 'logs')
 os.makedirs(SESSIONDIR, exist_ok=True)
 STATE_FILE         = os.path.join(DATADIR, 'state.json')
 TAWES_CACHE_FILE   = os.path.join(DATADIR, 'tawes_stations.json')
