@@ -23,8 +23,8 @@ $innerSafe = htmlspecialchars($inner, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 LBWeb::lbheader($L['MAIN.TITLE'] ?? 'Unwetter4Lox', '');
 ?>
 <style>
-/* iframe füllt LoxBerry-Content-Area vollständig aus */
-#u4l-wrap { margin: -4%; padding: 0; }
+/* iframe füllt LoxBerry-Content-Area vollständig aus (nur seitlich negativ, oben Abstand) */
+#u4l-wrap { margin: 0.5rem -4% 0; padding: 0; }
 #u4l-iframe {
     border: 0;
     width: 100%;

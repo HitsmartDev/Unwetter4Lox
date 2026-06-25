@@ -44,6 +44,7 @@ body.sl-embed {
 .sl-header-nav { background: var(--dark); padding: 0 0.8rem; }
 .sl-nav {
   display: flex;
+  justify-content: center;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   gap: 0;
