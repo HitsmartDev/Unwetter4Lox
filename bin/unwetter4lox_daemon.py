@@ -1,4 +1,4 @@
-"""Unwetter4Lox Daemon v0.9.28 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
+"""Unwetter4Lox Daemon v0.9.29 – GeoSphere (ZAMG) + INCA + TAWES 360° -> MQTT"""
 import os, sys, json, time, logging, configparser, urllib.request, signal, subprocess, glob, threading, math, re, traceback, socket
 from datetime import datetime, timezone, timedelta
 from collections import deque
@@ -106,7 +106,18 @@ log.info(f'Logging initialisiert (Level {CURRENT_LOGLEVEL})')
 
 def _on_signal(signum, frame):
     log.info(f'Daemon gestoppt (Signal {signum})')
-    publish('status', L['status_err'].format(v='Gestoppt'), retain=True)
+    try:
+        publish('status', L['status_err'].format(v='Gestoppt'), retain=True)
+    except: pass
+    # Paho-Background-Thread explizit stoppen BEVOR der Prozess endet.
+    # Ohne loop_stop() läuft der Thread nach sys.exit() noch kurz weiter,
+    # reconnectet zum Broker und kickt die neue Instanz (→ RC=7-Loop).
+    global mqtt_client
+    if mqtt_client:
+        try: mqtt_client.loop_stop()
+        except: pass
+        try: mqtt_client.disconnect()
+        except: pass
     if os.path.exists(PID_FILE):
         try: os.remove(PID_FILE)
         except: pass
@@ -375,7 +386,7 @@ _mqtt_reconnect_count     = 0
 _last_successful_publish  = 0.0   # Watchdog: wann hat zuletzt ein Publish geklappt
 _disconnect_since         = 0.0   # Watchdog: seit wann sind wir getrennt
 
-# RC-Code Bedeutungen (MQTT 3.1.1)
+# RC-Code Bedeutungen (MQTT 3.1.1 CONNACK + paho-interne Disconnect-Codes)
 _MQTT_RC = {
     0: 'Verbindung akzeptiert',
     1: 'Protokoll-Version nicht unterstützt',
@@ -383,6 +394,7 @@ _MQTT_RC = {
     3: 'Broker nicht verfügbar',
     4: 'Ungültige Zugangsdaten',
     5: 'Nicht autorisiert',
+    7: 'Verbindung unterbrochen – andere Instanz mit gleicher Client-ID?',
 }
 
 def _on_connect(c, u, f, rc):
@@ -1344,24 +1356,36 @@ def publish_all(status_msg, tawes=None, zamg=None, inca=None, alarm=None, prev=N
 MQTT_WATCHDOG_TIMEOUT = 1800
 
 def run():
-    # Vor dem Start: sicherstellen dass keine ältere Python-Instanz noch läuft
-    # (verhindert Client-ID-Konflikt → MQTT-Disconnect-Loop alle 5s)
+    # Vor dem Start: sicherstellen dass keine ältere Python-Instanz noch läuft.
+    # Wichtig: SIGTERM allein reicht nicht – paho's Background-Thread kann kurz nach
+    # sys.exit() noch einen Reconnect versuchen und die neue Instanz kicken (→ RC=7-Loop).
+    # Daher: SIGTERM senden, 2s warten, bei Bedarf SIGKILL nachlegen, nochmal 1s warten.
     my_pid = os.getpid()
     try:
         result = subprocess.run(
             ['pgrep', '-f', 'unwetter4lox_daemon.py'],
             capture_output=True, text=True
         )
+        killed = []
         for pid_str in result.stdout.strip().split():
             other = int(pid_str)
             if other != my_pid:
-                log.warning(f'Alte Instanz PID {other} gefunden – wird beendet')
-                try: os.kill(other, signal.SIGTERM)
+                log.warning(f'Alte Instanz PID {other} gefunden – SIGTERM')
+                try: os.kill(other, signal.SIGTERM); killed.append(other)
                 except: pass
-        time.sleep(1)
+        if killed:
+            time.sleep(2)
+            # Prüfen ob noch lebt → SIGKILL
+            for other in killed:
+                try:
+                    os.kill(other, 0)  # Existenz-Check
+                    log.warning(f'Alte Instanz PID {other} noch aktiv – SIGKILL')
+                    os.kill(other, signal.SIGKILL)
+                except OSError: pass  # Bereits beendet
+            time.sleep(1)
     except Exception: pass
 
-    log.info(f'Unwetter4Lox v0.9.23 gestartet | ZAMG={ZAMG_INTERVAL}s INCA={INCA_INTERVAL}s TAWES={TAWES_INTERVAL}s Loop={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID} | Upstream=±{TAWES_UPSTREAM_WINKEL}°')
+    log.info(f'Unwetter4Lox v0.9.29 gestartet | ZAMG={ZAMG_INTERVAL}s INCA={INCA_INTERVAL}s TAWES={TAWES_INTERVAL}s Loop={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID} | Upstream=±{TAWES_UPSTREAM_WINKEL}°')
     log.info(f'Standort: LAT={LAT:.6f} LON={LON:.6f}')
     _typ_namen = {1:'wind',2:'regen',3:'schnee',4:'glatteis',5:'gewitter',6:'hitze',7:'kaelte',8:'hagel'}
     _aktiv_str = ', '.join(_typ_namen[t] for t in sorted(ZAMG_AKTIVE_TYPEN) if t in _typ_namen)

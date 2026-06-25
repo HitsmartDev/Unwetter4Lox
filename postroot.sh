@@ -150,14 +150,14 @@ SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 
 @reboot root sleep 120 && runuser -u loxberry -- ${DAEMONSCRIPT} restart >/dev/null 2>&1
-0 3 * * * root runuser -u loxberry -- ${DAEMONSCRIPT} restart >/dev/null 2>&1
+2 3 * * * root runuser -u loxberry -- ${DAEMONSCRIPT} restart >/dev/null 2>&1
 */5 * * * * root if [ -f "${PIDFILE}" ] && ! kill -0 "\$(cat ${PIDFILE})" 2>/dev/null; then rm -f "${PIDFILE}" "${STATEFILE}"; runuser -u loxberry -- ${DAEMONSCRIPT} start >/dev/null 2>&1; fi
 CRONEOF
     chmod 0644 "${CROND}"
     chown root:root "${CROND}" 2>/dev/null
     echo "<OK> Cron-Jobs angelegt: ${CROND}"
     echo "<OK>   @reboot  – Autostart 120s nach Systemstart"
-    echo "<OK>   03:00    – Täglicher Restart (bereinigt MQTT-Langzeitprobleme)"
+    echo "<OK>   03:02    – Täglicher Restart (bereinigt MQTT-Langzeitprobleme; 03:02 vermeidet Kollision mit Watchdog um 03:00)"
     echo "<OK>   */5 min  – Watchdog: State löschen + Neustart bei Daemon-Absturz"
 else
     echo "<WARNING> Daemon-Script nicht gefunden – Cron konnte nicht angelegt werden: ${DAEMONSCRIPT}"
