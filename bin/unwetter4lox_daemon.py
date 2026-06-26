@@ -385,6 +385,7 @@ _mqtt_connect_time        = 0.0
 _mqtt_reconnect_count     = 0
 _last_successful_publish  = 0.0   # Watchdog: wann hat zuletzt ein Publish geklappt
 _disconnect_since         = 0.0   # Watchdog: seit wann sind wir getrennt
+_first_disco_time         = 0.0   # Zeit des ERSTEN Disconnects – nur bei rc=0 (Connect) zurückgesetzt
 
 # RC-Code Bedeutungen (MQTT 3.1.1 CONNACK + paho-interne Disconnect-Codes)
 _MQTT_RC = {
@@ -398,11 +399,12 @@ _MQTT_RC = {
 }
 
 def _on_connect(c, u, f, rc):
-    global _mqtt_connect_time, _mqtt_reconnect_count, _disconnect_since
+    global _mqtt_connect_time, _mqtt_reconnect_count, _disconnect_since, _first_disco_time
     if rc == 0:
         _mqtt_connected.set()
         _mqtt_connect_time = time.time()
         _disconnect_since  = 0.0
+        _first_disco_time  = 0.0   # Verbindung wiederhergestellt – Disco-Timer komplett zurücksetzen
         if _mqtt_reconnect_count > 0:
             log.info(f'MQTT: Verbunden mit {MQTT_BROKER}:{MQTT_PORT} (Reconnect #{_mqtt_reconnect_count})')
         else:
@@ -412,11 +414,13 @@ def _on_connect(c, u, f, rc):
         log.error(f'MQTT: Verbindung fehlgeschlagen – {reason} (RC={rc}) | Broker={MQTT_BROKER}:{MQTT_PORT}')
 
 def _on_disconnect(c, u, rc):
-    global _mqtt_reconnect_count, _disconnect_since
+    global _mqtt_reconnect_count, _disconnect_since, _first_disco_time
     _mqtt_connected.clear()
     _mqtt_reconnect_count += 1
     if _disconnect_since == 0.0:
         _disconnect_since = time.time()
+    if _first_disco_time == 0.0:
+        _first_disco_time = time.time()   # Startzeitpunkt der aktuellen Disconnect-Serie
     if rc == 0:
         log.info(f'MQTT: Verbindung sauber getrennt (Reconnect #{_mqtt_reconnect_count})')
     else:
@@ -1374,7 +1378,7 @@ def run():
                 try: os.kill(other, signal.SIGTERM); killed.append(other)
                 except: pass
         if killed:
-            time.sleep(2)
+            time.sleep(4)   # Länger warten: alte Instanz braucht Zeit für loop_stop()+disconnect()
             # Prüfen ob noch lebt → SIGKILL
             for other in killed:
                 try:
@@ -1382,10 +1386,10 @@ def run():
                     log.warning(f'Alte Instanz PID {other} noch aktiv – SIGKILL')
                     os.kill(other, signal.SIGKILL)
                 except OSError: pass  # Bereits beendet
-            time.sleep(1)
+            time.sleep(2)   # Nach SIGKILL: OS braucht Zeit Socket-Cleanup + Broker-Session-Release
     except Exception: pass
 
-    log.info(f'Unwetter4Lox v0.9.29 gestartet | ZAMG={ZAMG_INTERVAL}s INCA={INCA_INTERVAL}s TAWES={TAWES_INTERVAL}s Loop={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID} | Upstream=±{TAWES_UPSTREAM_WINKEL}°')
+    log.info(f'Unwetter4Lox v0.9.32 gestartet | ZAMG={ZAMG_INTERVAL}s INCA={INCA_INTERVAL}s TAWES={TAWES_INTERVAL}s Loop={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID} | Upstream=±{TAWES_UPSTREAM_WINKEL}°')
     log.info(f'Standort: LAT={LAT:.6f} LON={LON:.6f}')
     _typ_namen = {1:'wind',2:'regen',3:'schnee',4:'glatteis',5:'gewitter',6:'hitze',7:'kaelte',8:'hagel'}
     _aktiv_str = ', '.join(_typ_namen[t] for t in sorted(ZAMG_AKTIVE_TYPEN) if t in _typ_namen)
@@ -1420,10 +1424,23 @@ def run():
             if not _mqtt_connected.is_set():
                 elapsed_disco = now - _disconnect_since if _disconnect_since > 0 else 0
                 elapsed_pub   = now - _last_successful_publish if _last_successful_publish > 0 else 0
+                total_disco   = now - _first_disco_time if _first_disco_time > 0 else elapsed_disco
                 log.info(f'MQTT: Warte auf Verbindung (seit {elapsed_disco:.0f}s getrennt, '
-                         f'letztes Publish vor {elapsed_pub:.0f}s, Reconnects: {_mqtt_reconnect_count})')
-                if elapsed_disco > 300:
-                    log.warning(f'MQTT: {elapsed_disco/60:.1f}min dauerhaft getrennt – Hard Reset')
+                         f'gesamt {total_disco:.0f}s, Reconnects: {_mqtt_reconnect_count})')
+                if total_disco > 600:
+                    # Nach 10 Min ununterbrochener Trennung → selbst beenden.
+                    # Watchdog (*/5 Cron) erkennt den toten Prozess und startet sauber neu.
+                    # Verhindert ewigen RC=7-Loop falls eine Zombie-Instanz die Session hält.
+                    log.error(
+                        f'MQTT: {total_disco/60:.1f}min Dauertrennung (RC=7-Loop?) – '
+                        f'Daemon beendet sich für sauberen Neustart durch Watchdog '
+                        f'(Reconnects: {_mqtt_reconnect_count})'
+                    )
+                    try: os.remove(PID_FILE)
+                    except: pass
+                    sys.exit(2)
+                elif elapsed_disco > 300:
+                    log.warning(f'MQTT: {elapsed_disco/60:.1f}min getrennt – Hard Reset')
                     mqtt_connect()
             elif (_last_successful_publish > 0 and
                   (now - _last_successful_publish) > MQTT_WATCHDOG_TIMEOUT):
