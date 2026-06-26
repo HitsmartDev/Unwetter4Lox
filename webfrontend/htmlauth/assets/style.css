@@ -502,6 +502,19 @@ code { background: #eef2f7; padding: 1px 5px; border-radius: 3px; font-size: 0.7
 }
 .sl-status-dot.on  { background: var(--green); box-shadow: 0 0 0 3px rgba(39,174,96,0.2); }
 .sl-status-dot.off { background: var(--red);   box-shadow: 0 0 0 3px rgba(231,76,60,0.2); }
+
+/* Log-Health-Ampel im Daemon-Card-Head */
+.sl-log-light {
+  display: inline-block;
+  width: 13px; height: 13px;
+  border-radius: 50%;
+  border: 2px solid rgba(0,0,0,0.12);
+  flex-shrink: 0;
+  cursor: help;
+}
+.sl-log-light.green  { background: var(--green);  box-shadow: 0 0 6px rgba(39,174,96,0.5); }
+.sl-log-light.orange { background: var(--orange); box-shadow: 0 0 6px rgba(230,126,34,0.5); }
+.sl-log-light.red    { background: var(--red);    box-shadow: 0 0 6px rgba(231,76,60,0.5); }
 .sl-daemon-name { font-size: 1rem; font-weight: 700; }
 .sl-daemon-meta { font-size: 0.75rem; color: var(--muted); margin-top: 4px; line-height: 1.7; }
 .sl-daemon-meta b { color: var(--text); }

@@ -45,6 +45,45 @@ function alarm_color(int $lv): string {
     return ['#27ae60','#f1c40f','#e67e22','#e74c3c'][$lv] ?? '#27ae60';
 }
 
+// Liest Tail der Log-Datei und gibt 'green'/'orange'/'red'/'none' zurück.
+function log_health_check(?string $logfile): string {
+    if (!$logfile || !file_exists($logfile) || !is_readable($logfile)) return 'none';
+    $cutoff    = time() - 1800;
+    $has_error = false;
+    $has_warn  = false;
+    $fp = @fopen($logfile, 'rb');
+    if (!$fp) return 'none';
+    fseek($fp, 0, SEEK_END);
+    $size = ftell($fp);
+    fseek($fp, -min($size, 61440), SEEK_END);
+    $chunk = fread($fp, 61440);
+    fclose($fp);
+    foreach (explode("\n", $chunk) as $line) {
+        if (!preg_match('/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/', $line, $m)) continue;
+        if (strtotime($m[1]) < $cutoff) continue;
+        if (strpos($line, ' ERROR') !== false || strpos($line, '<ERR>') !== false) {
+            $has_error = true; break;
+        }
+        if (strpos($line, ' WARNING') !== false || strpos($line, '<WARN>') !== false) {
+            $has_warn = true;
+        }
+    }
+    if ($has_error) return 'red';
+    if ($has_warn)  return 'orange';
+    return 'green';
+}
+
+// ── Aktuelle Log-Datei ermitteln (für Health-Dot + Log-Button) ──
+$_ptr  = $lbplogdir . '/daemon.log.current';
+$_clog = file_exists($_ptr) ? trim(file_get_contents($_ptr)) : null;
+if ($_clog && !file_exists($_clog)) $_clog = null;
+if (!$_clog) {
+    $_logs = glob($lbpdatadir . '/logs/*.log') ?: [];
+    if (!$_logs) $_logs = glob($lbplogdir . '/*.log') ?: [];
+    if ($_logs) { usort($_logs, fn($a,$b) => filemtime($b) - filemtime($a)); $_clog = $_logs[0]; }
+}
+$log_health = $daemon_running ? log_health_check($_clog) : 'none';
+
 $inca   = $state['inca']  ?? [];
 $zamg   = $state['zamg']  ?? [];
 $alarm  = $state['alarm'] ?? [];
@@ -146,6 +185,17 @@ foreach ($cat_keys as $key):
 <div class="sl-card">
     <div class="sl-card-head">
         <span class="sl-card-head-title">🔧 <?= h($L['MAIN.TITLE'] ?? 'Unwetter4Lox') ?> <?= h($L['MAIN.STATUS'] ?? 'Status') ?></span>
+        <?php
+        $log_titles = [
+            'green'  => 'Log OK – keine Fehler/Warnungen in den letzten 30 min',
+            'orange' => 'Warnungen in den letzten 30 min – Log prüfen',
+            'red'    => 'Fehler in den letzten 30 min – Log prüfen',
+            'none'   => '',
+        ];
+        if ($log_health !== 'none'):
+        ?>
+        <span class="sl-log-light <?= $log_health ?>" title="<?= $log_titles[$log_health] ?>"></span>
+        <?php endif; ?>
         <span class="sl-badge <?= $daemon_running ? 'ok' : 'err' ?>">
             <?= $daemon_running ? ($L['MAIN.DAEMON_RUNNING'] ?? 'Läuft') : ($L['MAIN.DAEMON_STOPPED'] ?? 'Gestoppt') ?>
         </span>
@@ -186,14 +236,7 @@ foreach ($cat_keys as $key):
                 <button id="btn-start" class="sl-btn success sm" <?= !$coords_set ? 'disabled' : '' ?>>▶ Start</button>
 <?php endif; ?>
 <?php
-// Log-Viewer Button
-$_ptr  = $lbplogdir . '/daemon.log.current';
-$_clog = file_exists($_ptr) ? trim(file_get_contents($_ptr)) : null;
-if ($_clog && !file_exists($_clog)) $_clog = null;
-if (!$_clog) {
-    $_logs = glob($lbplogdir . '/*.log') ?: [];
-    if ($_logs) { usort($_logs, fn($a,$b) => filemtime($b) - filemtime($a)); $_clog = $_logs[0]; }
-}
+// Log-Viewer Button ($_clog wurde bereits oben ermittelt)
 if ($_clog):
 ?>
                 <a href="/admin/system/tools/logfile.cgi?logfile=<?= urlencode($_clog) ?>&package=<?= urlencode($lbpplugindir) ?>&name=Daemon&header=html&format=template"
