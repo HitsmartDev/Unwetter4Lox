@@ -291,6 +291,16 @@ if ($_clog):
             </div>
 <?php endforeach; ?>
         </div>
+<?php
+$notif_tages = $state['notification_tageswarnung'] ?? '';
+if ($notif_tages):
+?>
+        <div class="sl-section-title" style="margin-top:0.9rem">📅 Tagesvorschau – was heute noch kommt</div>
+        <div class="sl-notif" style="background:rgba(255,200,87,0.12);border-left:3px solid var(--amber)">
+            <?= h($notif_tages) ?>
+        </div>
+        <p class="sl-hint" style="margin:0.3rem 0 0">Amtliche GeoSphere-Warnung – beginnt heute, aber noch nicht unmittelbar bevorstehend. Wird an Loxone als <code>notification/tageswarnung</code> gesendet.</p>
+<?php endif; ?>
     </div>
 </div>
 
@@ -490,14 +500,27 @@ foreach ($tawes['alle_stationen'] as $st):
 <?php endif; ?>
 
 <!-- ================================================================
-     NOTIFICATION-VORSCHAU
+     AKTUELLE MELDUNGEN (notification/ Topics)
      ================================================================ -->
 <div class="sl-card">
     <div class="sl-card-head">
-        <span class="sl-card-head-title">🔔 <?= h($L['MAIN.LAST_NOTIF'] ?? 'Letzte Benachrichtigung') ?></span>
+        <span class="sl-card-head-title">🔔 <?= h($L['MAIN.LAST_NOTIF'] ?? 'Aktuelle Meldungen') ?></span>
     </div>
     <div class="sl-card-body">
-        <div class="sl-notif"><?= h($state['notification_alle'] ?? ($L['MAIN.NO_WARNS'] ?? 'Keine aktiven Warnungen')) ?></div>
+<?php
+$notif_alle  = $state['notification_alle'] ?? '';
+$notif_tages = $state['notification_tageswarnung'] ?? '';
+if ($notif_alle):
+?>
+        <div class="sl-section-title">🚨 Echtzeit-Alarm <span style="font-weight:400;font-size:0.72rem;color:#888">(notification/alle – für sofortige Push-Meldung)</span></div>
+        <div class="sl-notif"><?= h($notif_alle) ?></div>
+<?php else: ?>
+        <div class="sl-notif" style="color:#888"><?= h($L['MAIN.NO_WARNS'] ?? 'Kein aktiver Alarm') ?></div>
+<?php endif; ?>
+<?php if ($notif_tages): ?>
+        <div class="sl-section-title" style="margin-top:0.8rem">📅 Tagesvorschau <span style="font-weight:400;font-size:0.72rem;color:#888">(notification/tageswarnung – für Morgenroutine 07:00 Uhr)</span></div>
+        <div class="sl-notif" style="background:rgba(255,200,87,0.12);border-left:3px solid var(--amber)"><?= h($notif_tages) ?></div>
+<?php endif; ?>
     </div>
 </div>
 

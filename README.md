@@ -37,7 +37,10 @@ Amtliche Warnungen des österreichischen Wetterdienstes, nach GPS-Koordinaten ge
 
 **Warnstufen:** Gelb = 1 (Vorsicht), Orange = 2 (Warnung), Rot = 3 (erhebliche Gefahr), Lila = 3 (Extrem)
 
-ZAMG-Warnungen werden direkt als Alarmstufe übernommen – ohne Schwellwertprüfung. Das Plugin zeigt außerdem ZAMG-Warnungen die in den nächsten 8 Stunden beginnen als Tageswarnung (`notification/tageswarnung`), damit Morgenroutinen in Loxone bereits früh über bevorstehende Unwetter informiert werden.
+ZAMG-Warnungen werden direkt als Alarmstufe übernommen – ohne Schwellwertprüfung. Das Plugin unterscheidet dabei zwei Fälle:
+
+- **Aktiv oder bald (< 30 min):** Warnung fließt in `alarm/gesamt` ein → löst Echtzeit-Push mit `notification/alle` aus
+- **Heute, aber später (30 min – 8 Stunden):** Warnung erscheint **nur** in `notification/tageswarnung` und setzt `zamg/irgendwas_aktiv = 1` → ideal für die Morgenroutine um 07:00 Uhr
 
 ### 2. INCA Nowcast
 
@@ -224,7 +227,7 @@ Standard-Präfix: `unwetter/` (in den Einstellungen änderbar). Alle Topics werd
 | Topic | Beschreibung | Werte |
 |:------|:-------------|:------|
 | `zamg/max_stufe` | Höchste aktive Warnstufe | `0`–`4` |
-| `zamg/irgendwas_aktiv` | Mind. eine aktive/baldige Warnung | `0` / `1` |
+| `zamg/irgendwas_aktiv` | Mind. eine Warnung aktiv, bald (< 30 min) **oder** als Tageswarnung (< 8h) | `0` / `1` |
 | `zamg/akutwarnung` | Behördliche Akutwarnung (GWA) | `0` / `1` |
 | `zamg/{typ}/stufe` | Warnstufe je Wettertyp | `0`–`4` |
 | `zamg/{typ}/aktiv` | Warnung gerade aktiv | `0` / `1` |
@@ -289,7 +292,7 @@ Textmeldungen für Push-Benachrichtigungen – in Alltagssprache, auch ohne Mete
 | `notification/inca` | Nowcast-Vorhersage: Was kommt in den nächsten 60 Minuten? | `🌧️ Regen ist vor Ort: 8.5 mm/h – von Wetterstationen in der Umgebung bestätigt \| Intensität nimmt zu` |
 | `notification/tawes` | Lagebericht der Umgebungsstationen: Was messen sie gerade? | `🌧️ Regen aus NW nähert sich – 22 mm/h in der Umgebung gemessen, Ankunft in ca. 15 Minuten` |
 | `notification/alle` | **Empfehlung für Loxone Push.** Vollständige Zusammenfassung: Was, Woher, Wie lange, Wie sicher. | `⚡ Gewitter wahrscheinlich (Warnstufe 2/3) \| Blitz und Donner erwartet \| Amtliche Warnung ORANGE (GeoSphere Austria) \| Warnung gültig bis Fr 22:00 \| Prognose-Zuverlässigkeit: sehr zuverlässig` |
-| `notification/tageswarnung` | ZAMG-Warnungen für die nächsten 8 Stunden – ideal für 07:00-Morgenroutine. | `📅 heute 16:00: ⚠️ GELB Gewitter` |
+| `notification/tageswarnung` | ZAMG-Warnungen für die nächsten 8 Stunden – ideal für 07:00-Morgenroutine. | `📅 heute 16:00–heute 22:00 \| ⚠️ GELB Gewitter mit Blitz und Donner möglich \| Amtl. GeoSphere-Warnung` |
 | `notification/entwarnung` | Einmalig bei Alarmende. | `Entwarnung – kein Unwetter mehr aktiv` |
 
 **Hinweis:** `notification/inca` und `notification/tawes` werden immer gesendet (auch ohne aktiven Alarm), damit Loxone eigenständig entscheiden kann, was angezeigt wird. Bei `alarm/gesamt = 0` enthält `notification/alle` den Tageswarnung-Text oder ist leer.
@@ -463,7 +466,7 @@ Prüfe `alarm/wind_quelle`. Wenn dort `INCA (Xkm/h)` steht, kommt der Alarm vom 
 Prüfe `alarm/regen_quelle`. `TAWES_LOK (Station 12km ...)` bedeutet eine Station im Lokal-Umkreis hat Regen gemeldet. Lokal-Umkreis in den Einstellungen verkleinern oder REGEN_ALARM erhöhen.
 
 **Was bedeutet notification/tageswarnung?**
-Wenn ZAMG Warnungen für die nächsten 8 Stunden hat, erscheint dort eine Zusammenfassung. Ideal für eine Loxone Morgenroutine (Zeitprogramm 07:00) damit du beim Aufstehen weißt ob heute Unwetter kommen.
+Wenn GeoSphere Austria Warnungen für heute (aber erst in 30 Minuten bis 8 Stunden) angekündigt hat, erscheint dort eine Zusammenfassung mit Startzeit, Endzeit und Kurzbeschreibung. Beispiel: `📅 heute 16:00–heute 22:00 | ⚠️ GELB Gewitter mit Blitz und Donner möglich | Amtl. GeoSphere-Warnung`. Ideal für eine Loxone Morgenroutine: Zeitprogramm 07:00, Gate auf `zamg/irgendwas_aktiv = 1`, Nachricht = `notification/tageswarnung`. Wichtig: Diese Warnung löst **keinen** Echtzeit-Alarm aus — dafür ist `alarm/gesamt` + `notification/alle` zuständig (wird erst aktiv wenn die Warnung < 30 Minuten entfernt ist).
 
 ---
 

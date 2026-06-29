@@ -172,7 +172,7 @@ render_header('app_help');
 <p>Typen: <code>wind · regen · schnee · glatteis · gewitter · hagel · hitze · kaelte</code></p>
 <table class="sl-mqtt-tbl"><thead><tr><th>Topic</th><th>Werte</th><th>Bedeutung</th></tr></thead><tbody>
 <tr><td><code>zamg/max_stufe</code></td><td>0–4</td><td>Höchste aktive Stufe über alle Typen</td></tr>
-<tr><td><code>zamg/irgendwas_aktiv</code></td><td>0 / 1</td><td>1 wenn mind. eine Warnung aktiv/bald</td></tr>
+<tr><td><code>zamg/irgendwas_aktiv</code></td><td>0 / 1</td><td>1 wenn mind. eine Warnung aktiv, bald (&lt;30 min) <b>oder</b> als Tageswarnung (&lt;8h) → Gate für Morgenroutine</td></tr>
 <tr><td><code>zamg/akutwarnung</code></td><td>0 / 1</td><td>Stationsbasierte Akutwarnung</td></tr>
 <tr><td><code>zamg/{typ}/stufe</code></td><td>0–4</td><td>Warnstufe</td></tr>
 <tr><td><code>zamg/{typ}/aktiv</code></td><td>0 / 1</td><td>Warnung läuft gerade</td></tr>
@@ -308,6 +308,21 @@ render_header('app_help');
 <summary>MQTT-Verbindung bricht regelmäßig ab?</summary>
 <div class="sl-details-body">
 <p>Zwei gleichzeitig laufende Daemon-Instanzen kicken sich gegenseitig. Der Daemon beendet alte Instanzen beim Start automatisch. Überwache <code>status/mqtt_reconnects</code> – sollte bei stabiler Verbindung nicht wachsen.</p>
+</div>
+</details>
+
+<details class="sl-details-nested">
+<summary>Was ist der Unterschied zwischen Tageswarnung und Echtzeit-Alarm?</summary>
+<div class="sl-details-body">
+<p>Das Plugin unterscheidet zwei Arten von Warnungen – mit unterschiedlichen MQTT-Topics und unterschiedlichem Verhalten in Loxone:</p>
+<table class="sl-mqtt-tbl"><thead><tr><th></th><th>Tageswarnung</th><th>Echtzeit-Alarm</th></tr></thead><tbody>
+<tr><td><b>Wann aktiv?</b></td><td>Warnung startet in 30 Min – 8 Stunden</td><td>Warnung aktiv ODER startet in &lt;30 Min, oder Radar/Stationen messen etwas</td></tr>
+<tr><td><b>MQTT Gate</b></td><td><code>zamg/irgendwas_aktiv = 1</code></td><td><code>alarm/gesamt ≥ 1</code></td></tr>
+<tr><td><b>Push-Text</b></td><td><code>notification/tageswarnung</code></td><td><code>notification/alle</code></td></tr>
+<tr><td><b>Loxone Einsatz</b></td><td>Morgenroutine 07:00 Uhr</td><td>Sofort-Push bei Alarm</td></tr>
+<tr><td><b>Beispiel</b></td><td><i>📅 heute 16:00–22:00 | GELB Gewitter mit Blitz und Donner | GeoSphere Austria</i></td><td><i>⚡ Gewitter möglich (Warnstufe 1/3) | Amtliche Warnung GELB | Warnung gültig bis 22:00</i></td></tr>
+</tbody></table>
+<p class="sl-hint"><b>Empfehlung:</b> Zwei Loxone-Automatisierungen anlegen – eine für 07:00 mit Tageswarnung-Gate, eine für Echtzeit-Alarm mit alarm/gesamt-Gate.</p>
 </div>
 </details>
 
