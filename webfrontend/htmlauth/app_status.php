@@ -251,7 +251,8 @@ if ($_clog):
 <!-- ================================================================
      GEOSPHERE WARNUNGEN (offizielle ZAMG)
      ================================================================ -->
-<div class="sl-card <?= (!$irdw && !$akut) ? 'collapsed' : '' ?>">
+<?php $notif_tages = trim($state['notification_tageswarnung'] ?? ''); ?>
+<div class="sl-card <?= (!$irdw && !$akut && !$notif_tages) ? 'collapsed' : '' ?>">
     <div class="sl-card-head">
         <span class="sl-card-head-title">🌩️ <?= h($L['MAIN.GEO_WARNS'] ?? 'GeoSphere Austria – offizielle Warnungen') ?></span>
         <?php if ($akut || $irdw): ?>
@@ -291,9 +292,7 @@ if ($_clog):
             </div>
 <?php endforeach; ?>
         </div>
-<?php
-$notif_tages = $state['notification_tageswarnung'] ?? '';
-if ($notif_tages):
+<?php if ($notif_tages):
 ?>
         <div class="sl-section-title" style="margin-top:0.9rem">📅 Tagesvorschau – was heute noch kommt</div>
         <div class="sl-notif" style="background:rgba(255,200,87,0.12);border-left:3px solid var(--amber)">
@@ -509,7 +508,6 @@ foreach ($tawes['alle_stationen'] as $st):
     <div class="sl-card-body">
 <?php
 $notif_alle  = $state['notification_alle'] ?? '';
-$notif_tages = $state['notification_tageswarnung'] ?? '';
 if ($notif_alle):
 ?>
         <div class="sl-section-title">🚨 Echtzeit-Alarm <span style="font-weight:400;font-size:0.72rem;color:#888">(notification/alle – für sofortige Push-Meldung)</span></div>
