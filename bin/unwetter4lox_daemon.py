@@ -821,7 +821,19 @@ def fetch_zamg():
             max_stufe = max(max_stufe, wlevel); irgendwas = 1
             if nt not in warn_texts: warn_texts.append(nt)
         elif is_today:
-            tt = f'📅 {fmt_dt(s_ep)}: {sf} {tn}'
+            # Kurzbeschreibung was die Warnung in der Praxis bedeutet
+            _TAGES_BED = {
+                'gewitter': 'Gewitter mit Blitz und Donner möglich',
+                'wind':     'Starke Böen und Sturmgefahr',
+                'regen':    'Starkregen möglich',
+                'hagel':    'Hagelschlag – Schäden an Fahrzeugen möglich',
+                'schnee':   'Starker Schneefall – Behinderungen möglich',
+                'glatteis': 'Glatteis und Rutschgefahr',
+                'hitze':    'Extreme Hitze – ausreichend Flüssigkeit',
+                'kaelte':   'Starker Frost – Kälteschutz beachten',
+            }
+            bed = _TAGES_BED.get(typ, tn)
+            tt = f'📅 {fmt_dt(s_ep)}–{fmt_dt(e_ep)} | {sf} {bed} | Amtl. GeoSphere-Warnung'
             if tt not in tages_texts: tages_texts.append(tt)
     n_active = len([t for t, v in result.items() if v['aktiv']])
     n_today  = len([t for t, v in result.items() if v['tageswarnung']])
@@ -1490,7 +1502,7 @@ def run():
             time.sleep(2)   # Nach SIGKILL: OS braucht Zeit Socket-Cleanup + Broker-Session-Release
     except Exception: pass
 
-    log.info(f'Unwetter4Lox v0.9.37 gestartet | ZAMG={ZAMG_INTERVAL}s INCA={INCA_INTERVAL}s TAWES={TAWES_INTERVAL}s Loop={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID} | Upstream=±{TAWES_UPSTREAM_WINKEL}°')
+    log.info(f'Unwetter4Lox v0.9.38 gestartet | ZAMG={ZAMG_INTERVAL}s INCA={INCA_INTERVAL}s TAWES={TAWES_INTERVAL}s Loop={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID} | Upstream=±{TAWES_UPSTREAM_WINKEL}°')
     log.info(f'Standort: LAT={LAT:.6f} LON={LON:.6f}')
     _typ_namen = {1:'wind',2:'regen',3:'schnee',4:'glatteis',5:'gewitter',6:'hitze',7:'kaelte',8:'hagel'}
     _aktiv_str = ', '.join(_typ_namen[t] for t in sorted(ZAMG_AKTIVE_TYPEN) if t in _typ_namen)
