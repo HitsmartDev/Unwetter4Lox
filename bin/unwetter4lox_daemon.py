@@ -988,7 +988,9 @@ def build_alarm(zamg, inca, tawes, prev_alarm, trend=None):
 
     # === REGEN ===
     a_r = 0; rq = '–'; conf_r = 0
-    zr = _stufe_al(z.get('regen',{}).get('stufe',0))
+    # ZAMG nur wenn aktiv ODER bald (< 30 Min) – fernere Warnungen nur in notification/tageswarnung
+    _zr_d = z.get('regen', {})
+    zr = _stufe_al(_zr_d.get('stufe', 0)) if (_zr_d.get('aktiv') or _zr_d.get('bald')) else 0
     if zr: a_r = max(a_r, zr); rq = 'ZAMG'; conf_r = max(conf_r, 40)
 
     rr       = i.get('rr_jetzt', 0) or 0
@@ -1037,7 +1039,8 @@ def build_alarm(zamg, inca, tawes, prev_alarm, trend=None):
 
     # === WIND ===
     a_w = 0; wq = '–'; conf_w = 0
-    zw = _stufe_al(z.get('wind',{}).get('stufe',0))
+    _zw_d = z.get('wind', {})
+    zw = _stufe_al(_zw_d.get('stufe', 0)) if (_zw_d.get('aktiv') or _zw_d.get('bald')) else 0
     if zw: a_w = max(a_w, zw); wq = 'ZAMG'; conf_w = max(conf_w, 40)
 
     fx60     = i.get('fx_max_60min', 0) or 0
@@ -1060,16 +1063,23 @@ def build_alarm(zamg, inca, tawes, prev_alarm, trend=None):
     conf_w = min(100, conf_w + trend_bonus)
 
     # === GEWITTER / HAGEL / SCHNEE ===
-    a_g = _stufe_al(z.get('gewitter',{}).get('stufe',0))
+    # ZAMG-Stufen nur wenn aktiv ODER bald (< 30 Min) – fernere Warnungen nur in notification/tageswarnung
+    _zg_d = z.get('gewitter', {})
+    a_g = _stufe_al(_zg_d.get('stufe', 0)) if (_zg_d.get('aktiv') or _zg_d.get('bald')) else 0
     gs  = int(t.get('gewitter_signal', 0) or 0)
     if gs >= 1: a_g = max(a_g, 1)
     if gs >= 2: a_g = max(a_g, 2)
     if z.get('akutwarnung', 0): a_g = max(a_g, 2)
 
-    a_h = min(2, _stufe_al(z.get('hagel',{}).get('stufe',0)))
+    _zh_d = z.get('hagel', {})
+    a_h = min(2, _stufe_al(_zh_d.get('stufe', 0)) if (_zh_d.get('aktiv') or _zh_d.get('bald')) else 0)
     if i.get('bald_hagel',0) or i.get('bald_graupel',0): a_h = max(a_h, 1)
 
-    a_s = min(2, max(_stufe_al(z.get('schnee',{}).get('stufe',0)), _stufe_al(z.get('glatteis',{}).get('stufe',0))))
+    _zs_d = z.get('schnee', {}); _ze_d = z.get('glatteis', {})
+    a_s = min(2, max(
+        _stufe_al(_zs_d.get('stufe', 0)) if (_zs_d.get('aktiv') or _zs_d.get('bald')) else 0,
+        _stufe_al(_ze_d.get('stufe', 0)) if (_ze_d.get('aktiv') or _ze_d.get('bald')) else 0
+    ))
     if i.get('pt_jetzt',255) in (2,3): a_s = max(a_s, 1)
 
     a_ges = max(a_w, a_r, a_g, a_h, a_s)
@@ -1480,7 +1490,7 @@ def run():
             time.sleep(2)   # Nach SIGKILL: OS braucht Zeit Socket-Cleanup + Broker-Session-Release
     except Exception: pass
 
-    log.info(f'Unwetter4Lox v0.9.36 gestartet | ZAMG={ZAMG_INTERVAL}s INCA={INCA_INTERVAL}s TAWES={TAWES_INTERVAL}s Loop={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID} | Upstream=±{TAWES_UPSTREAM_WINKEL}°')
+    log.info(f'Unwetter4Lox v0.9.37 gestartet | ZAMG={ZAMG_INTERVAL}s INCA={INCA_INTERVAL}s TAWES={TAWES_INTERVAL}s Loop={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID} | Upstream=±{TAWES_UPSTREAM_WINKEL}°')
     log.info(f'Standort: LAT={LAT:.6f} LON={LON:.6f}')
     _typ_namen = {1:'wind',2:'regen',3:'schnee',4:'glatteis',5:'gewitter',6:'hitze',7:'kaelte',8:'hagel'}
     _aktiv_str = ', '.join(_typ_namen[t] for t in sorted(ZAMG_AKTIVE_TYPEN) if t in _typ_namen)
