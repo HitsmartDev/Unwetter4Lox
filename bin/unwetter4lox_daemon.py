@@ -1092,26 +1092,102 @@ def build_alarm(zamg, inca, tawes, prev_alarm, trend=None):
     else:
         eta_best = eta if eta >= 0 else -1
 
-    # Zusammenfassung als lesbarer Klartext (für notification/alle und alarm/zusammenfassung)
-    W_TXT = ['', 'Windwarnung', 'Sturmwarnung', 'Extremsturm']
+    # Zusammenfassung: Quelle, Messwerte, Zeitfenster – für notification/alle und alarm/zusammenfassung
+    W_TXT = ['', 'Böenwarnung', 'Sturmwarnung', 'Extremsturm']
     R_TXT = ['', 'Regen möglich', 'Regen bestätigt', 'Starkregen']
     kfz_txt = ('sehr hoch' if konfidenz >= 80 else
                ('hoch'     if konfidenz >= 60 else
                ('mittel'   if konfidenz >= 40 else 'gering')))
     parts = []
+
+    # --- WIND ---
     if a_w > 0:
-        parts.append(f'💨 {W_TXT[min(a_w,3)]} (Stufe {a_w}/3)')
+        zw_d   = z.get('wind', {})
+        peak   = max(fx60, i.get('fx_jetzt', 0) or 0, w_up)
+        wr_name= t.get('dominante_windrichtung_name', '') if tawes_wind else ''
+        if zw_d.get('stufe'):
+            w_src = f'[GeoSphere {_STUFE_FARBE.get(zw_d["stufe"], "")}]'
+        elif wq and wq != '–':
+            w_src = f'[{wq.split("(")[0].strip()}]'
+        else:
+            w_src = '[Nowcast]'
+        w_part = f'💨 {W_TXT[min(a_w,3)]} Stufe {a_w}/3 {w_src}'
+        if peak > 0:   w_part += f' | bis {round(peak)} km/h'
+        if wr_name:    w_part += f' aus {wr_name}'
+        if zw_d.get('aktiv') and zw_d.get('end_epoch', 0) > 0:
+            w_part += f' | aktiv bis {fmt_dt(zw_d["end_epoch"])}'
+        elif zw_d.get('bald') and zw_d.get('start_epoch', 0) > 0:
+            w_part += f' | erwartet ab {fmt_dt(zw_d["start_epoch"])}'
+        parts.append(w_part)
+
+    # --- REGEN ---
     if a_r > 0:
-        rp = f'🌧️ {R_TXT[min(a_r,3)]} (Stufe {a_r}/3)'
-        if eta_best > 0:   rp += f' – Ankunft in ~{eta_best} min'
-        elif eta_best == 0: rp += ' – Regen jetzt vor Ort'
+        zr_d = z.get('regen', {})
+        if zr_d.get('stufe'):
+            r_src = f'[GeoSphere {_STUFE_FARBE.get(zr_d["stufe"], "")}]'
+        elif rq and rq != '–':
+            r_src = f'[{rq.split("(")[0].strip()}]'
+        else:
+            r_src = '[Nowcast]'
+        rp = f'🌧️ {R_TXT[min(a_r,3)]} Stufe {a_r}/3 {r_src}'
+        if rr > 0.1:      rp += f' | {rr:.1f} mm/h'
+        elif up_mm > 0:   rp += f' | {up_mm:.1f} mm/h upstream'
+        if eta_best > 0:  rp += f' | Ankunft ~{eta_best} min'
+        elif eta_best == 0: rp += ' | Regen vor Ort'
+        if zr_d.get('aktiv') and zr_d.get('end_epoch', 0) > 0:
+            rp += f' | bis {fmt_dt(zr_d["end_epoch"])}'
+        elif zr_d.get('bald') and zr_d.get('start_epoch', 0) > 0:
+            rp += f' | ab {fmt_dt(zr_d["start_epoch"])}'
         if regen_trend == 'stark_zunehmend': rp += ', intensiviert sich rasch'
-        elif regen_trend == 'zunehmend': rp += ', nimmt zu'
-        elif regen_trend == 'abnehmend': rp += ', lässt nach'
+        elif regen_trend == 'zunehmend':     rp += ', nimmt zu'
+        elif regen_trend == 'abnehmend':     rp += ', lässt nach'
         parts.append(rp)
-    if a_g > 0: parts.append(f'⚡ Gewitterwarnung (Stufe {a_g}/3)')
-    if a_h > 0: parts.append(f'🌨 Hagelgefahr (Stufe {a_h}/3)')
-    if a_s > 0: parts.append(f'❄️ Schnee/Eis (Stufe {a_s}/3)')
+
+    # --- GEWITTER ---
+    if a_g > 0:
+        zg_d   = z.get('gewitter', {})
+        gs_sig = int(t.get('gewitter_signal', 0) or 0)
+        if zg_d.get('stufe'):
+            g_src = f'[GeoSphere {_STUFE_FARBE.get(zg_d["stufe"], "")}]'
+        elif gs_sig:
+            g_src = f'[TAWES Blitzdetekt. {gs_sig}]'
+        else:
+            g_src = '[Nowcast]'
+        g_part = f'⚡ Gewitterwarnung Stufe {a_g}/3 {g_src}'
+        if zg_d.get('aktiv') and zg_d.get('end_epoch', 0) > 0:
+            g_part += f' | aktiv bis {fmt_dt(zg_d["end_epoch"])}'
+        elif zg_d.get('bald') and zg_d.get('start_epoch', 0) > 0:
+            g_part += f' | erwartet ab {fmt_dt(zg_d["start_epoch"])}'
+        parts.append(g_part)
+
+    # --- HAGEL ---
+    if a_h > 0:
+        zh_d = z.get('hagel', {})
+        if zh_d.get('stufe'):
+            h_src = f'[GeoSphere {_STUFE_FARBE.get(zh_d["stufe"], "")}]'
+        elif i.get('bald_hagel'):
+            h_src = '[Nowcast Hagel]'
+        else:
+            h_src = '[Nowcast Graupel]'
+        h_part = f'🌨 Hagelgefahr Stufe {a_h}/3 {h_src}'
+        if zh_d.get('aktiv') and zh_d.get('end_epoch', 0) > 0:
+            h_part += f' | bis {fmt_dt(zh_d["end_epoch"])}'
+        parts.append(h_part)
+
+    # --- SCHNEE / EIS ---
+    if a_s > 0:
+        zs_d  = z.get('schnee', {})
+        ze_d  = z.get('glatteis', {})
+        zse_d = zs_d if (zs_d.get('stufe') or 0) >= (ze_d.get('stufe') or 0) else ze_d
+        if zse_d.get('stufe'):
+            s_src = f'[GeoSphere {_STUFE_FARBE.get(zse_d["stufe"], "")}]'
+        else:
+            s_src = '[Nowcast]'
+        s_part = f'❄️ Schnee/Eis Stufe {a_s}/3 {s_src}'
+        if zse_d.get('aktiv') and zse_d.get('end_epoch', 0) > 0:
+            s_part += f' | bis {fmt_dt(zse_d["end_epoch"])}'
+        parts.append(s_part)
+
     if parts and konfidenz >= 40:
         parts.append(f'Sicherheit: {kfz_txt}')
     zusf = ' | '.join(parts) if parts else ('Entwarnung – kein Unwetter mehr' if entw else '')
@@ -1305,10 +1381,11 @@ def publish_all(status_msg, tawes=None, zamg=None, inca=None, alarm=None, prev=N
     publish('notification/tageswarnung', notif_tages)
 
     if a_ges >= 1:
-        # notification/alle: lesbare Zusammenfassung (aus build_alarm.zusammenfassung)
+        # notification/alle: zusammenfassung enthält jetzt bereits Quelle + Zeit + Messwerte.
+        # ZAMG-Offizialtext nur noch anhängen wenn GeoSphere-Info noch nicht drin ist
+        # (Fallback für den seltenen Fall dass zamg aktiv aber nicht in build_alarm erfasst).
         notif_alle = (alarm or {}).get('zusammenfassung', '')
-        # ZAMG-Offizialtext anhängen wenn aktive amtliche Warnung vorliegt
-        if zamg and zamg.get('irgendwas_aktiv'):
+        if zamg and zamg.get('irgendwas_aktiv') and '[GeoSphere' not in notif_alle:
             zamg_txt = zamg.get('notification_geosphere', '')
             if zamg_txt and zamg_txt not in notif_alle:
                 notif_alle = (notif_alle + ' | ' + zamg_txt) if notif_alle else zamg_txt
@@ -1391,7 +1468,7 @@ def run():
             time.sleep(2)   # Nach SIGKILL: OS braucht Zeit Socket-Cleanup + Broker-Session-Release
     except Exception: pass
 
-    log.info(f'Unwetter4Lox v0.9.34 gestartet | ZAMG={ZAMG_INTERVAL}s INCA={INCA_INTERVAL}s TAWES={TAWES_INTERVAL}s Loop={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID} | Upstream=±{TAWES_UPSTREAM_WINKEL}°')
+    log.info(f'Unwetter4Lox v0.9.35 gestartet | ZAMG={ZAMG_INTERVAL}s INCA={INCA_INTERVAL}s TAWES={TAWES_INTERVAL}s Loop={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID} | Upstream=±{TAWES_UPSTREAM_WINKEL}°')
     log.info(f'Standort: LAT={LAT:.6f} LON={LON:.6f}')
     _typ_namen = {1:'wind',2:'regen',3:'schnee',4:'glatteis',5:'gewitter',6:'hitze',7:'kaelte',8:'hagel'}
     _aktiv_str = ', '.join(_typ_namen[t] for t in sorted(ZAMG_AKTIVE_TYPEN) if t in _typ_namen)
