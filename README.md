@@ -1,6 +1,6 @@
 # Unwetter4Lox
 
-**LoxBerry-Plugin für automatische Unwettererkennung und Wetterautomatisierung. Version 0.9.20**
+**LoxBerry-Plugin für automatische Unwettererkennung und Wetterautomatisierung. Version 0.9.36**
 
 Unwetter4Lox kombiniert drei offizielle österreichische Wetterdatenquellen der GeoSphere Austria und berechnet daraus einen einheitlichen Alarmstatus mit bis zu 30 Minuten Vorlaufzeit. Alle Daten werden via MQTT an den Loxone Miniserver geliefert – ein einziger Wert pro Kategorie reicht für zuverlässige Automatisierungen.
 
@@ -122,7 +122,7 @@ Das Plugin puffert die letzten ~40 Minuten (8 Zyklen) aller Messwerte und analys
 | Beschleunigung erkannt | +10 |
 | INCA-ETA und Physik-ETA stimmen überein | +15 |
 
-Der Konfidenz-Score erscheint in `alarm/konfidenz` und in den Notification-Texten als "Sicherheit: gering/mittel/hoch/sehr hoch".
+Der Konfidenz-Score erscheint in `alarm/konfidenz` und in den Notification-Texten als "Prognose-Zuverlässigkeit: unsicher/wahrscheinlich/zuverlässig/sehr zuverlässig".
 
 ---
 
@@ -216,7 +216,7 @@ Standard-Präfix: `unwetter/` (in den Einstellungen änderbar). Alle Topics werd
 | `alarm/regen_trend` | Intensitätstrend | `stark_zunehmend` / `zunehmend` / `stabil` / `abnehmend` / `unbekannt` |
 | `alarm/wind_quelle` | Welche Quelle hat `alarm/wind` ausgelöst | Text |
 | `alarm/regen_quelle` | Welche Quelle hat `alarm/regen` ausgelöst | Text |
-| `alarm/zusammenfassung` | Lesbarer Alarmtext | z.B. `🌧️ Regen bestätigt (Stufe 2/3) – Ankunft in ~12 min` |
+| `alarm/zusammenfassung` | Lesbarer Alarmtext | z.B. `🌧️ Regen im Anmarsch (Warnstufe 2/3) – 8.5 mm/h in der näheren Umgebung gemessen \| Ankunft in ca. 12 Minuten \| Radar + Wetterstationen bestätigt` |
 | `alarm/entwarnung` | Wechselt einmalig auf `1` wenn Alarm endet | `0` / `1` |
 
 ### GeoSphere Warnungen (zamg/)
@@ -281,16 +281,16 @@ Standard-Präfix: `unwetter/` (in den Einstellungen änderbar). Alle Topics werd
 
 ### Notifications (notification/)
 
-Textmeldungen für Push-Benachrichtigungen in lesbarem Deutsch – kein technischer Jargon.
+Textmeldungen für Push-Benachrichtigungen – in Alltagssprache, auch ohne Meteorologie-Kenntnisse verständlich. Jede Meldung erklärt: **Was** wird gewarnt, **warum** (Woher kommt die Warnung), **wie lange** (Zeitfenster) und **wie zuverlässig** die Vorhersage ist.
 
 | Topic | Beschreibung | Beispiel |
 |:------|:-------------|:---------|
-| `notification/geosphere` | ZAMG-Warntext. **Immer aktiv.** | `⚠️ ORANGE – Gewitter \| heute 15:00–21:00` |
-| `notification/inca` | Nowcast-Vorhersage in Klartext. | `🌧️ Regen erwartet in ~12 Minuten – durch Wetterstationen bestätigt (Sicherheit: hoch)` |
-| `notification/tawes` | Lagebericht der Umgebungsstationen. | `🌧️ Regen aus NW nähert sich – 22 mm/h gemessen, Ankunft in ~15 Minuten, Intensität nimmt zu` |
-| `notification/alle` | Kombinierte Hauptmeldung. **Empfehlung für Loxone Push.** | `🌧️ Regen bestätigt (Stufe 2/3) – Ankunft in ~12 min \| Sicherheit: hoch` |
-| `notification/tageswarnung` | ZAMG-Warnungen für die nächsten 8 Stunden. | `📅 heute 16:00: ⚠️ GELB Gewitter` |
-| `notification/entwarnung` | Einmalig bei Alarmende. | `Entwarnung – kein Unwetter mehr` |
+| `notification/geosphere` | Amtliche ZAMG-Warnungen. **Immer aktiv.** | `⚠️ ORANGE – Gewitter \| heute 15:00–21:00` |
+| `notification/inca` | Nowcast-Vorhersage: Was kommt in den nächsten 60 Minuten? | `🌧️ Regen ist vor Ort: 8.5 mm/h – von Wetterstationen in der Umgebung bestätigt \| Intensität nimmt zu` |
+| `notification/tawes` | Lagebericht der Umgebungsstationen: Was messen sie gerade? | `🌧️ Regen aus NW nähert sich – 22 mm/h in der Umgebung gemessen, Ankunft in ca. 15 Minuten` |
+| `notification/alle` | **Empfehlung für Loxone Push.** Vollständige Zusammenfassung: Was, Woher, Wie lange, Wie sicher. | `⚡ Gewitter wahrscheinlich (Warnstufe 2/3) \| Blitz und Donner erwartet \| Amtliche Warnung ORANGE (GeoSphere Austria) \| Warnung gültig bis Fr 22:00 \| Prognose-Zuverlässigkeit: sehr zuverlässig` |
+| `notification/tageswarnung` | ZAMG-Warnungen für die nächsten 8 Stunden – ideal für 07:00-Morgenroutine. | `📅 heute 16:00: ⚠️ GELB Gewitter` |
+| `notification/entwarnung` | Einmalig bei Alarmende. | `Entwarnung – kein Unwetter mehr aktiv` |
 
 **Hinweis:** `notification/inca` und `notification/tawes` werden immer gesendet (auch ohne aktiven Alarm), damit Loxone eigenständig entscheiden kann, was angezeigt wird. Bei `alarm/gesamt = 0` enthält `notification/alle` den Tageswarnung-Text oder ist leer.
 

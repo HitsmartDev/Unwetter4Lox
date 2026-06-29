@@ -222,14 +222,23 @@ render_header('app_help');
 <details class="sl-details-nested">
 <summary>🔔 notification/ – Fertige Push-Texte</summary>
 <div class="sl-details-body">
-<table class="sl-mqtt-tbl"><thead><tr><th>Topic</th><th>Bedeutung</th></tr></thead><tbody>
-<tr><td><code>notification/geosphere</code></td><td>ZAMG aktive Warnungen – <b>immer aktiv</b></td></tr>
-<tr><td><code>notification/tageswarnung</code></td><td>Warnungen die in den nächsten 8h beginnen – ideal für 07:00 Morgenroutine</td></tr>
-<tr><td><code>notification/inca</code></td><td>INCA Nowcast in lesbarem Deutsch</td></tr>
-<tr><td><code>notification/tawes</code></td><td>Lagebericht der Umgebungsstationen</td></tr>
-<tr><td><code>notification/alle</code></td><td><b>Empfehlung für Loxone Push-Button</b> – Hauptnachricht</td></tr>
+<p>Alle Benachrichtigungstexte sind in <b>einfacher Alltagssprache</b> verfasst – verständlich ohne Meteorologie-Kenntnisse. Jede Meldung erklärt:</p>
+<ul>
+    <li><b>Was</b> wird gewarnt (Gewitter, Sturmböen, Regen, Hagel, Eis/Schnee)</li>
+    <li><b>Warum / Woher</b> die Warnung kommt (z.B. „Amtliche Warnung GELB", „Radar + Wetterstationen bestätigt")</li>
+    <li><b>Wie lange</b> die Warnung gilt (z.B. „Warnung gültig bis Fr 22:00")</li>
+    <li><b>Wie zuverlässig</b> die Prognose ist (sehr zuverlässig / zuverlässig / wahrscheinlich)</li>
+</ul>
+<table class="sl-mqtt-tbl"><thead><tr><th>Topic</th><th>Bedeutung</th><th>Beispiel</th></tr></thead><tbody>
+<tr><td><code>notification/alle</code></td><td><b>Empfehlung für Loxone Push</b> – vollständige Zusammenfassung</td><td><i>⚡ Gewitter wahrscheinlich (Warnstufe 2/3) | Blitz und Donner erwartet | Amtliche Warnung ORANGE (GeoSphere Austria) | Warnung gültig bis Fr 22:00 | Prognose-Zuverlässigkeit: sehr zuverlässig</i></td></tr>
+<tr><td><code>notification/geosphere</code></td><td>Amtliche ZAMG-Warnungen – <b>immer aktiv</b></td><td><i>⚠️ ORANGE – Gewitter | heute 15:00–21:00</i></td></tr>
+<tr><td><code>notification/inca</code></td><td>Nowcast: Was kommt in den nächsten 60 Minuten?</td><td><i>🌧️ Regen ist vor Ort: 8.5 mm/h – von Wetterstationen bestätigt | Intensität nimmt zu</i></td></tr>
+<tr><td><code>notification/tawes</code></td><td>Was messen die Wetterstationen in der Umgebung gerade?</td><td><i>🌧️ Regen aus NW nähert sich – 22 mm/h gemessen, Ankunft in ca. 15 Minuten</i></td></tr>
+<tr><td><code>notification/tageswarnung</code></td><td>Warnungen die heute noch kommen – ideal für 07:00 Morgenroutine</td><td><i>📅 heute 16:00: ⚠️ GELB Gewitter</i></td></tr>
+<tr><td><code>notification/entwarnung</code></td><td>Einmalig wenn der Alarm endet</td><td><i>Entwarnung – kein Unwetter mehr aktiv</i></td></tr>
 </tbody></table>
 <p class="sl-hint"><b>Loxone Morgenroutine:</b> Zeitprogramm 07:00 → Gate auf <code>zamg/irgendwas_aktiv = 1</code> → Push mit <code>notification/tageswarnung</code>.</p>
+<p class="sl-hint"><b>Echtzeit-Alarm:</b> <code>alarm/gesamt</code> wechselt auf ≥1 → Push mit <code>notification/alle</code>.</p>
 </div>
 </details>
 
@@ -299,6 +308,27 @@ render_header('app_help');
 <summary>MQTT-Verbindung bricht regelmäßig ab?</summary>
 <div class="sl-details-body">
 <p>Zwei gleichzeitig laufende Daemon-Instanzen kicken sich gegenseitig. Der Daemon beendet alte Instanzen beim Start automatisch. Überwache <code>status/mqtt_reconnects</code> – sollte bei stabiler Verbindung nicht wachsen.</p>
+</div>
+</details>
+
+<details class="sl-details-nested">
+<summary>Was bedeuten die Benachrichtigungstexte?</summary>
+<div class="sl-details-body">
+<p>Jede Benachrichtigung erklärt auf einen Blick vier Dinge – kein technischer Jargon, auch für Familienmitglieder verständlich:</p>
+<ul>
+    <li><b>Was</b> wird gewarnt – z.B. „Gewitter wahrscheinlich", „Sturm erwartet", „Regen im Anmarsch"</li>
+    <li><b>Woher</b> die Warnung kommt:<br>
+        – <i>„Amtliche Warnung GELB/ORANGE/ROT (GeoSphere Austria)"</i> = offizielle Behördenwarnung<br>
+        – <i>„Radar + Wetterstationen bestätigt"</i> = zwei unabhängige Quellen stimmen überein<br>
+        – <i>„Wetterradar-Prognose"</i> = Nowcast-Modell allein (noch nicht durch Stationen bestätigt)
+    </li>
+    <li><b>Wann</b> – z.B. „Warnung gültig bis Fr 22:00", „Ankunft in ca. 12 Minuten"</li>
+    <li><b>Wie sicher</b> – z.B. „Prognose-Zuverlässigkeit: sehr zuverlässig" (≥80 Punkte), „zuverlässig" (≥60), „wahrscheinlich" (≥40)</li>
+</ul>
+<p>Beispiele:</p>
+<p><code>⚡ Gewitter möglich (Warnstufe 1/3) | Blitz und Donner erwartet | Amtliche Warnung GELB (GeoSphere Austria) | Warnung gültig bis So 19:00 | Prognose-Zuverlässigkeit: sehr zuverlässig</code></p>
+<p><code>💨 Sturm erwartet (Warnstufe 2/3) – Böen bis 92 km/h aus NW | Radar + Wetterstationen bestätigt | Prognose-Zuverlässigkeit: zuverlässig</code></p>
+<p><code>🌧️ Regen im Anmarsch (Warnstufe 1/3) – 5.2 mm/h in der näheren Umgebung gemessen | Ankunft in ca. 15 Minuten | Wetterradar-Prognose</code></p>
 </div>
 </details>
 
