@@ -386,6 +386,8 @@ _mqtt_reconnect_count     = 0
 _last_successful_publish  = 0.0   # Watchdog: wann hat zuletzt ein Publish geklappt
 _disconnect_since         = 0.0   # Watchdog: seit wann sind wir getrennt
 _first_disco_time         = 0.0   # Zeit des ERSTEN Disconnects – nur bei rc=0 (Connect) zurückgesetzt
+_prev_notif_alle          = ''    # Spam-Gate: letzter publizierter notification/alle Text
+_prev_notif_alle_ts       = 0.0   # Zeitstempel der letzten notification/alle Veröffentlichung
 
 # RC-Code Bedeutungen (MQTT 3.1.1 CONNACK + paho-interne Disconnect-Codes)
 _MQTT_RC = {
@@ -691,15 +693,20 @@ def correlate_tawes(initial_history=False):
     ffx_v = [s['FFX_kmh'] for s in upstream if s.get('FFX_kmh') is not None and not (TAWES_MAX_UPSTREAM_HOEHE > 0 and s.get('alt', 0) > TAWES_MAX_UPSTREAM_HOEHE)]
     alp_cnt = sum(1 for s in upstream if TAWES_MAX_UPSTREAM_HOEHE > 0 and s.get('alt', 0) > TAWES_MAX_UPSTREAM_HOEHE)
     if ffx_v:
-        w_up_kmh = round(max(ffx_v), 1); min_c = max(2, round(len(ffx_v) * TAWES_MIN_ALARM_PCT / 100))
+        w_up_kmh = round(max(ffx_v), 1)
+        min_c = max(2, math.ceil(len(ffx_v) * TAWES_MIN_ALARM_PCT / 100))
         sturm_up = int(sum(1 for v in ffx_v if v >= BOEN_ALARM) >= min_c)
+    # Warnung wenn zu wenige Upstream-Stationen (ohne alpine Ausreißer)
+    up_tal_cnt = len(ffx_v)
+    if up_tal_cnt < 3:
+        log.warning(f'TAWES: Nur {up_tal_cnt} Upstream-Stationen ohne Alpenausreißer – Radius oder Upstream-Winkel erhöhen empfohlen!')
     # Regen
     reg_up = 0; r_up_mm = 0.0; r_start = {}
     for st in upstream:
         buf = list(TAWES_BUFFER.get(st['id'], []))
         for i in range(len(buf)-1, max(-1, len(buf)-4), -1):
             if (buf[i].get('RR') or 0) > 0.1: r_start[st['id']] = -(len(buf)-1-i); reg_up = 1; break
-    if reg_up and len(r_start) >= max(1, round(len(upstream) * TAWES_MIN_ALARM_PCT / 100)):
+    if reg_up and len(r_start) >= max(1, math.ceil(len(upstream) * TAWES_MIN_ALARM_PCT / 100)):
         for sid in r_start:
             m = max((b.get('RR') or 0 for b in list(TAWES_BUFFER[sid])[-3:]), default=0)
             if m*6 > r_up_mm: r_up_mm = round(m*6, 1)
@@ -741,7 +748,8 @@ def correlate_tawes(initial_history=False):
         'letztes_update': datetime.now().astimezone().strftime('%d.%m.%Y %H:%M:%S'),
         'dominante_windrichtung': round(dom_wr, 1), 'dominante_windrichtung_name': dom_wr_name,
         'wind_upstream_kmh': w_up_kmh, 'sturm_upstream': sturm_up, 'regen_upstream': reg_up, 'regen_upstream_mm': r_up_mm,
-        'upstream_aktiv': len(upstream), 'regen_lokal': r_lok, 'regen_lokal_mm': r_lok_mm, 'regen_lokal_station': r_lok_st,
+        'upstream_aktiv': len(upstream), 'upstream_zu_wenig': int(up_tal_cnt < 3),
+        'regen_lokal': r_lok, 'regen_lokal_mm': r_lok_mm, 'regen_lokal_station': r_lok_st,
         'alpine_upstream': alp_cnt, 'naechste_station_name': ns['name'] if ns else '–',
         'naechste_station_km': ns['dist_km'] if ns else 0, 'naechste_station_richtung': ns.get('bearing_name', '–') if ns else '–',
         'eta_physik_min': eta_physik, 'eta_physik_station': eta_physik_station,
@@ -1292,8 +1300,8 @@ def _notification_tawes(t, alarm=None):
         s = f'💨 Sturmfront aus {wr} nähert sich'
         if keta > 0: s += f' – Ankunft in ~{keta} Minuten'
         parts.append(s)
-    elif w_up > 20 and n_up > 0:
-        parts.append(f'Wind aus {wr}: {w_up} km/h ({n_up} Stationen)')
+    elif w_up >= BOEN_ALARM * 0.75 and n_up > 0:
+        parts.append(f'💨 Wind aus {wr} nimmt zu – {round(w_up)} km/h gemessen, nähert sich der Alarmschwelle ({round(BOEN_ALARM)} km/h)')
     # Regen
     up_mm = t.get('regen_upstream_mm', 0) or 0
     if up_mm > 0:
@@ -1332,6 +1340,7 @@ def save_state(data):
     except: pass
 
 def publish_all(status_msg, tawes=None, zamg=None, inca=None, alarm=None, prev=None):
+    global _prev_notif_alle, _prev_notif_alle_ts
     now = datetime.now().astimezone(); ts_iso = now.strftime('%d.%m.%Y %H:%M:%S'); ts_epoch = int(now.timestamp())
     publish('letzter_abruf_datum',  ts_iso); publish('letzter_abruf_epoch', ts_epoch); publish('status/last_seen', ts_epoch)
     publish('status', L['status_ok'] if status_msg == 'OK' else L['status_err'].format(v=status_msg), retain=True)
@@ -1380,7 +1389,7 @@ def publish_all(status_msg, tawes=None, zamg=None, inca=None, alarm=None, prev=N
 
     # TAWES
     if tawes and tawes.get('_api_ok', True):
-        for k in ('dominante_windrichtung','dominante_windrichtung_name','upstream_aktiv',
+        for k in ('dominante_windrichtung','dominante_windrichtung_name','upstream_aktiv','upstream_zu_wenig',
                   'wind_upstream_kmh','sturm_upstream','regen_upstream','regen_upstream_mm',
                   'regen_lokal','regen_lokal_mm','regen_lokal_station','alpine_upstream','letztes_update',
                   'wind_kaskade','wind_kaskade_eta_min','wind_kaskade_speed_kmh',
@@ -1416,21 +1425,29 @@ def publish_all(status_msg, tawes=None, zamg=None, inca=None, alarm=None, prev=N
     publish('notification/tageswarnung', notif_tages)
 
     if a_ges >= 1:
-        # notification/alle: zusammenfassung enthält jetzt bereits Quelle + Zeit + Messwerte.
-        # ZAMG-Offizialtext nur noch anhängen wenn GeoSphere-Info noch nicht drin ist
-        # (Fallback für den seltenen Fall dass zamg aktiv aber nicht in build_alarm erfasst).
+        # notification/alle: zusammenfassung enthält Quelle + Zeit + Messwerte.
+        # ZAMG-Offizialtext nur noch anhängen wenn GeoSphere-Info noch nicht drin ist.
         notif_alle = (alarm or {}).get('zusammenfassung', '')
         if zamg and zamg.get('irgendwas_aktiv') and '[GeoSphere' not in notif_alle:
             zamg_txt = zamg.get('notification_geosphere', '')
             if zamg_txt and zamg_txt not in notif_alle:
                 notif_alle = (notif_alle + ' | ' + zamg_txt) if notif_alle else zamg_txt
-        publish('notification/alle', notif_alle)
     elif entw:
         notif_alle = L['entwarnung']
-        publish('notification/alle', notif_alle)
     else:
         # Kein Alarm: Tageswarnung weiterleiten wenn vorhanden, sonst leer
-        publish('notification/alle', notif_tages if notif_tages else '')
+        notif_alle = notif_tages if notif_tages else ''
+
+    # Spam-Gate: nur publizieren wenn sich Inhalt ändert oder 30-Min-Heartbeat für Reconnects
+    _now = time.time()
+    _notif_changed = (notif_alle != _prev_notif_alle)
+    if _notif_changed or (_now - _prev_notif_alle_ts) > 1800:
+        publish('notification/alle', notif_alle)
+        _prev_notif_alle    = notif_alle
+        _prev_notif_alle_ts = _now
+        if _notif_changed:
+            _short = notif_alle[:100] + ('...' if len(notif_alle) > 100 else '')
+            log.debug(f'notification/alle geändert → {_short}')
 
     # INCA: Felder heißen direkt fx_jetzt/ff_jetzt/rr_jetzt/pt_jetzt – keine Aliases nötig
     inca_st = {k: v for k, v in (inca or {}).items() if k != '_api_ok'}
@@ -1503,7 +1520,7 @@ def run():
             time.sleep(2)   # Nach SIGKILL: OS braucht Zeit Socket-Cleanup + Broker-Session-Release
     except Exception: pass
 
-    log.info(f'Unwetter4Lox v0.9.41 gestartet | ZAMG={ZAMG_INTERVAL}s INCA={INCA_INTERVAL}s TAWES={TAWES_INTERVAL}s Loop={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID} | Upstream=±{TAWES_UPSTREAM_WINKEL}°')
+    log.info(f'Unwetter4Lox v0.9.42 gestartet | ZAMG={ZAMG_INTERVAL}s INCA={INCA_INTERVAL}s TAWES={TAWES_INTERVAL}s Loop={INTERVAL}s | Broker={MQTT_BROKER}:{MQTT_PORT} | MQTT-ID={_MQTT_CLIENT_ID} | Upstream=±{TAWES_UPSTREAM_WINKEL}°')
     log.info(f'Standort: LAT={LAT:.6f} LON={LON:.6f}')
     _typ_namen = {1:'wind',2:'regen',3:'schnee',4:'glatteis',5:'gewitter',6:'hitze',7:'kaelte',8:'hagel'}
     _aktiv_str = ', '.join(_typ_namen[t] for t in sorted(ZAMG_AKTIVE_TYPEN) if t in _typ_namen)

@@ -399,8 +399,21 @@ if ($_clog):
             </li>
             <li>
                 <span class="sl-info-key"><?= $L['MAIN.TAWES_UPSTREAM_COUNT'] ?? 'Upstream-Stationen' ?></span>
-                <span class="sl-info-val"><?= (int)($tawes['upstream_aktiv'] ?? 0) ?></span>
+                <span class="sl-info-val <?= (int)($tawes['upstream_zu_wenig'] ?? 0) ? 'alert' : '' ?>">
+                    <?= (int)($tawes['upstream_aktiv'] ?? 0) ?>
+                    <?php if ((int)($tawes['upstream_zu_wenig'] ?? 0)): ?>⚠️<?php endif; ?>
+                </span>
             </li>
+<?php if ((int)($tawes['upstream_zu_wenig'] ?? 0)): ?>
+            <li style="list-style:none;padding:0">
+                <div class="sl-notif" style="background:rgba(255,200,87,0.15);border-left:3px solid var(--amber);font-size:0.78rem;padding:0.4rem 0.6rem">
+                    ⚠️ <b>Zu wenige Upstream-Stationen</b> – aktuell nur <?= (int)($tawes['upstream_aktiv'] ?? 0) ?> im Windkegel.
+                    Für zuverlässige Alarme mindestens 3 Stationen empfohlen.
+                    Bitte Suchradius (<code>MAX_DISTANCE_KM</code>) erhöhen oder Upstream-Winkel (<code>UPSTREAM_WINKEL_GRAD</code>) vergrößern.
+                </div>
+            </li>
+<?php endif; ?>
+
             <li>
                 <span class="sl-info-key"><?= $L['MAIN.TAWES_WIND_UPSTREAM'] ?? 'Max Böen upstream' ?></span>
                 <span class="sl-info-val <?= (float)($tawes['wind_upstream_kmh'] ?? 0) >= $boen_sw ? 'alert' : '' ?>">
